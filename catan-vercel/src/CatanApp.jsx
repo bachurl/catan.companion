@@ -14,7 +14,7 @@ const STYLE_CSS = `
 
 .catan-app{
   min-height:100vh;
-  background:var(--bg);
+  background:linear-gradient(to bottom, #78350f, #92400e, #713f12);
   color:var(--text);
   font-family:'Nunito',system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial;
   position:relative;
@@ -822,8 +822,9 @@ export default function CatanApp() {
   //  RENDER: SETUP - NAMES
   // ═══════════════════════════════════════════════
   if (phase === "names") return (
-    <div className="min-h-screen bg-gradient-to-b from-amber-900 via-amber-800 to-yellow-900 flex items-center justify-center p-4">
-      <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full shadow-2xl border border-amber-600/30">
+    <div className="catan-app flex items-center justify-center p-4">
+      <style>{STYLE_CSS}</style>
+      <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full shadow-2xl border border-amber-600/30" style={{position:"relative",zIndex:1}}>
         <h2 className="text-2xl font-bold text-amber-400 mb-6 text-center">Nombres y colores</h2>
         <div className="space-y-3 mb-8">
           {players.map((p, i) => {
@@ -907,8 +908,9 @@ export default function CatanApp() {
     };
 
     return (
-      <div className="min-h-screen bg-gradient-to-b from-amber-900 via-amber-800 to-yellow-900 p-4">
-        <div className="max-w-lg mx-auto">
+      <div className="catan-app p-4">
+        <style>{STYLE_CSS}</style>
+        <div className="max-w-lg mx-auto" style={{position:"relative",zIndex:1}}>
           <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor:COLORS[players[setupIdx]?.ci ?? setupIdx].h}}>
@@ -1008,7 +1010,9 @@ export default function CatanApp() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col">
+    <div className="catan-app flex flex-col">
+      <style>{STYLE_CSS}</style>
+      <div className="flex flex-col flex-1 min-h-screen" style={{position:"relative",zIndex:1}}>
       {/* Winner overlay */}
       {winner !== null && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
@@ -1030,7 +1034,7 @@ export default function CatanApp() {
       )}
 
       {/* Header */}
-      <div className="bg-slate-800 border-b border-slate-700 px-4 py-3">
+      <div className="bg-slate-800/90 border-b border-slate-700 px-4 py-3">
         <div className="flex items-center justify-between max-w-2xl mx-auto">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full" style={{backgroundColor:COLORS[cur.ci].h}} />
@@ -1726,6 +1730,7 @@ export default function CatanApp() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
