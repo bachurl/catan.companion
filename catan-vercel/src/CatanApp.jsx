@@ -1,4 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { db } from './firebase';
+import { ref, set, get, onValue, off } from 'firebase/database';
 
 const STYLE_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Nunito:wght@400;600;700;800&display=swap');
@@ -254,6 +256,24 @@ const COLORS = [
 const COLOR_EMOJI = ["🔵","🔴","⚪","🟠","🟢","🟣"];
 const playerMark = (ci) => COLOR_EMOJI[ci] || "🔘";
 
+// ═══════════════════════════════════════════════
+//  MULTIPLAYER
+// ═══════════════════════════════════════════════
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const genCode = () => Array.from({length:4}, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
+const getOrCreateId = () => {
+  let id = localStorage.getItem('catan-pid');
+  if (!id) { id = Math.random().toString(36).slice(2,10); localStorage.setItem('catan-pid', id); }
+  return id;
+};
+const fixPlayer = (p) => ({
+  ...p,
+  productions: p.productions || [],
+  hand: p.hand || { madera:0, ladrillo:0, trigo:0, oveja:0, mineral:0 },
+  devCards: p.devCards || [],
+  ports: p.ports || [],
+  devCardBought: p.devCardBought || [],
+});
 
 // ═══════════════════════════════════════════════
 //  UTILIDADES
@@ -263,7 +283,7 @@ const rollDie = () => Math.floor(Math.random() * 6) + 1;
 const afford = (h, c) => Object.entries(c).every(([r, a]) => (h[r] || 0) >= a);
 const totalC = h => Object.values(h).reduce((a, b) => a + b, 0);
 const eHand = () => ({ madera: 0, ladrillo: 0, trigo: 0, oveja: 0, mineral: 0 });
-let _id = 1;
+let _id = Date.now();
 const gid = () => _id++;
 
 const numberProb = n => { const d = Math.abs(7 - n); return 6 - d; };
@@ -302,7 +322,7 @@ const ResBadge = ({ id, count, small }) => {
 //  APP PRINCIPAL
 // ═══════════════════════════════════════════════
 export default function CatanApp() {
-  const [phase, setPhase] = useState("count");
+  const [phase, setPhase] = useState("lobby");
   const [pCount, setPCount] = useState(3);
   const [players, setPlayers] = useState([]);
   const [cp, setCp] = useState(0); // current player
@@ -317,18 +337,28 @@ export default function CatanApp() {
   const [rolling, setRolling] = useState(false);
   const [modal, setModal] = useState(null);
   const [winner, setWinner] = useState(null);
-  // Freemium MVP: historial de tiradas (tipo ruleta)
-  const [diceHistory, setDiceHistory] = useState([]); // array of sums, newest first
-  const [lastDistribution, setLastDistribution] = useState(null); // { num, lines: [{ci,name,items}] }
+  const [diceHistory, setDiceHistory] = useState([]);
+  const [lastDistribution, setLastDistribution] = useState(null);
   const [setupIdx, setSetupIdx] = useState(0);
   const [setupData, setSetupData] = useState({});
-  // Modal-level state (lifted to avoid hooks-in-IIFE)
+  // Modal-level state
   const [modalDiscards, setModalDiscards] = useState(eHand());
   const [modalHexes, setModalHexes] = useState([{ num: "", res: "" }]);
   const [tradeOther, setTradeOther] = useState(0);
   const [tradeGive, setTradeGive] = useState(eHand());
   const [tradeReceive, setTradeReceive] = useState(eHand());
   const notifTimer = useRef(null);
+
+  // ── MULTIPLAYER STATE ──
+  const [mode, setMode] = useState(null); // null | 'local' | 'online'
+  const [gameId, setGameId] = useState(null);
+  const [playerId] = useState(getOrCreateId);
+  const [isHost, setIsHost] = useState(false);
+  const [lobbyPlayers, setLobbyPlayers] = useState({});
+  const [myPlayerIndex, setMyPlayerIndex] = useState(-1);
+  const [joinCode, setJoinCode] = useState('');
+  const [lobbyName, setLobbyName] = useState('');
+  const skipSync = useRef(0);
 
   const addLog = useCallback((msg) => setLog(l => [{ t: Date.now(), m: msg }, ...l].slice(0, 100)), []);
 
@@ -337,6 +367,130 @@ export default function CatanApp() {
     if (notifTimer.current) clearTimeout(notifTimer.current);
     notifTimer.current = setTimeout(() => setNotif(null), dur);
   }, []);
+
+  // ═══════════════════════════════════════════════
+  //  FIREBASE SYNC
+  // ═══════════════════════════════════════════════
+  const isOnline = mode === 'online' && !!gameId && !!db;
+  const isMyTurn = mode !== 'online' || myPlayerIndex === cp;
+
+  // Auto-detect ?game=XXXX in URL
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('game');
+    if (code) setJoinCode(code.toUpperCase());
+  }, []);
+
+  // Lobby listener
+  useEffect(() => {
+    if (!isOnline || phase !== 'lobby') return;
+    const lobbyRef = ref(db, `games/${gameId}/lobby`);
+    const unsub = onValue(lobbyRef, snap => setLobbyPlayers(snap.val() || {}));
+    return () => off(lobbyRef);
+  }, [isOnline, gameId, phase]);
+
+  // Game state → Firebase (write)
+  useEffect(() => {
+    if (!isOnline || phase === 'lobby') return;
+    if (skipSync.current > 0) { skipSync.current--; return; }
+    const state = {
+      phase, pCount, players, cp, turnPhase, dice, deck, robber,
+      log: log.slice(0, 50), turn, diceHistory, lastDistribution,
+      setupIdx, setupData, _w: playerId
+    };
+    set(ref(db, `games/${gameId}/state`), state).catch(() => {});
+  }, [phase, pCount, players, cp, turnPhase, dice, deck, robber, log, turn, diceHistory, lastDistribution, setupIdx, setupData]);
+
+  // Firebase → Game state (read)
+  useEffect(() => {
+    if (!isOnline) return;
+    const stateRef = ref(db, `games/${gameId}/state`);
+    const unsub = onValue(stateRef, snap => {
+      const d = snap.val();
+      if (!d || d._w === playerId) return;
+      skipSync.current = 1;
+      if (d.phase) setPhase(d.phase);
+      if (d.pCount) setPCount(d.pCount);
+      if (d.players) setPlayers(d.players.map(fixPlayer));
+      if (d.cp !== undefined) setCp(d.cp);
+      if (d.turnPhase) setTurnPhase(d.turnPhase);
+      if (d.dice) setDice(d.dice);
+      setDeck(d.deck || []);
+      setRobber(d.robber ?? null);
+      if (d.log) setLog(d.log);
+      if (d.turn) setTurn(d.turn);
+      setDiceHistory(d.diceHistory || []);
+      setLastDistribution(d.lastDistribution ?? null);
+      if (d.setupIdx !== undefined) setSetupIdx(d.setupIdx);
+      if (d.setupData) setSetupData(d.setupData);
+    });
+    return () => off(stateRef);
+  }, [isOnline, gameId, playerId]);
+
+  // ═══════════════════════════════════════════════
+  //  LOBBY HANDLERS
+  // ═══════════════════════════════════════════════
+  const createGame = async () => {
+    if (!db) { showNotif('Firebase no configurado. Editá firebase.js'); return; }
+    const code = genCode();
+    const name = lobbyName.trim() || 'Host';
+    await set(ref(db, `games/${code}`), {
+      host: playerId, createdAt: Date.now(),
+      lobby: { [playerId]: { name, ci: 0, order: 0 } }
+    });
+    setGameId(code);
+    setIsHost(true);
+    setMode('online');
+    setMyPlayerIndex(0);
+    setLobbyPlayers({ [playerId]: { name, ci: 0, order: 0 } });
+  };
+
+  const joinGame = async () => {
+    if (!db) { showNotif('Firebase no configurado'); return; }
+    const code = joinCode.toUpperCase().trim();
+    if (code.length !== 4) { showNotif('El código debe tener 4 letras'); return; }
+    const snap = await get(ref(db, `games/${code}`));
+    if (!snap.exists()) { showNotif('Partida no encontrada'); return; }
+    const game = snap.val();
+    if (game.state && game.state.phase && game.state.phase !== 'lobby') {
+      showNotif('La partida ya empezó'); return;
+    }
+    const entries = Object.entries(game.lobby || {});
+    const order = entries.length;
+    const usedColors = entries.map(([,v]) => v.ci);
+    const freeColor = [0,1,2,3,4,5].find(c => !usedColors.includes(c)) ?? 0;
+    const name = lobbyName.trim() || `Jugador ${order + 1}`;
+    await set(ref(db, `games/${code}/lobby/${playerId}`), { name, ci: freeColor, order });
+    setGameId(code);
+    setIsHost(false);
+    setMode('online');
+    setMyPlayerIndex(order);
+    showNotif(`Te uniste a la partida ${code}`);
+  };
+
+  const startOnlineGame = () => {
+    const entries = Object.entries(lobbyPlayers).sort(([,a],[,b]) => a.order - b.order);
+    if (entries.length < 2) { showNotif('Se necesitan al menos 2 jugadores'); return; }
+    const newPlayers = entries.map(([, lp]) => ({
+      name: lp.name, ci: lp.ci, productions: [], hand: eHand(),
+      devCards: [], knightsPlayed: 0, roadsBuilt: 0,
+      ports: [], devCardBought: [], devCardPlayed: false,
+    }));
+    const count = newPlayers.length;
+    setPlayers(newPlayers);
+    setPCount(count);
+    const sd = {};
+    for (let i = 0; i < count; i++) sd[i] = [{ hexes: [{ num: "", res: "" }] }, { hexes: [{ num: "", res: "" }] }];
+    setSetupData(sd);
+    setSetupIdx(0);
+    const myEntry = entries.findIndex(([id]) => id === playerId);
+    setMyPlayerIndex(myEntry >= 0 ? myEntry : 0);
+    setPhase("settlements");
+  };
+
+  const startLocal = () => {
+    setMode('local');
+    setPhase('count');
+  };
 
   // ── SCORES ──
   const scores = useMemo(() => players.map(p => {
@@ -790,6 +944,103 @@ export default function CatanApp() {
   };
 
   // ═══════════════════════════════════════════════
+  //  RENDER: LOBBY (MULTIPLAYER)
+  // ═══════════════════════════════════════════════
+  if (phase === "lobby") return (
+    <div className="catan-app">
+      <style>{STYLE_CSS}</style>
+      <div className="catan-container center-screen">
+        {!mode ? (
+          <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full text-center shadow-2xl border border-amber-600/30">
+            <div className="text-6xl mb-4">🏝️</div>
+            <h1 className="catan-title text-4xl font-bold mb-2">CATÁN</h1>
+            <p className="text-slate-400 mb-8">Companion App</p>
+            <div className="mb-6">
+              <input
+                className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-white focus:border-amber-500 focus:outline-none transition text-center"
+                value={lobbyName} onChange={e => setLobbyName(e.target.value)}
+                placeholder="Tu nombre" maxLength={20}
+              />
+            </div>
+            {db ? (
+              <div className="space-y-3">
+                <button onClick={createGame}
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
+                  Crear partida online
+                </button>
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-white text-center uppercase tracking-widest font-bold focus:border-amber-500 focus:outline-none"
+                    value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase().slice(0,4))}
+                    placeholder="CÓDIGO" maxLength={4}
+                  />
+                  <button onClick={joinGame} disabled={joinCode.length !== 4}
+                    className="px-6 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl transition-all disabled:opacity-30">
+                    Unirse
+                  </button>
+                </div>
+                <div className="border-t border-slate-700 pt-3 mt-3">
+                  <button onClick={startLocal}
+                    className="w-full py-3 bg-slate-700 hover:bg-slate-600 text-slate-300 font-bold rounded-xl transition-all">
+                    Jugar local (sin internet)
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <button onClick={startLocal}
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
+                  Jugar
+                </button>
+                <p className="text-slate-500 text-sm">Para multijugador online, configurá Firebase en src/firebase.js</p>
+              </div>
+            )}
+          </div>
+        ) : mode === 'online' && gameId ? (
+          <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full shadow-2xl border border-amber-600/30">
+            <h2 className="text-2xl font-bold text-amber-400 mb-4 text-center">Sala de espera</h2>
+            <div className="bg-slate-800 rounded-2xl p-4 mb-6 text-center">
+              <p className="text-slate-400 text-sm mb-2">Código de partida</p>
+              <div className="text-4xl font-bold text-white tracking-[.5em] font-mono">{gameId}</div>
+              <button onClick={() => {
+                const url = `${window.location.origin}${window.location.pathname}?game=${gameId}`;
+                navigator.clipboard?.writeText(url).then(() => showNotif('Link copiado'));
+              }} className="mt-3 text-sm text-amber-400 hover:text-amber-300">
+                Copiar link de invitación
+              </button>
+            </div>
+            <div className="space-y-2 mb-6">
+              <p className="text-slate-400 text-sm">Jugadores conectados ({Object.keys(lobbyPlayers).length})</p>
+              {Object.entries(lobbyPlayers).sort(([,a],[,b]) => a.order - b.order).map(([pid, lp]) => (
+                <div key={pid} className="flex items-center gap-3 bg-slate-800 rounded-xl px-4 py-3">
+                  <div className="w-8 h-8 rounded-full" style={{backgroundColor: COLORS[lp.ci]?.h || '#666'}} />
+                  <span className="text-white font-medium flex-1">{lp.name}</span>
+                  {pid === playerId && <span className="text-amber-400 text-xs font-bold">TÚ</span>}
+                </div>
+              ))}
+            </div>
+            {isHost && Object.keys(lobbyPlayers).length >= 2 ? (
+              <button onClick={startOnlineGame}
+                className="w-full py-3 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-lg transition-all">
+                Empezar partida ({Object.keys(lobbyPlayers).length} jugadores)
+              </button>
+            ) : isHost ? (
+              <p className="text-slate-500 text-center text-sm">Esperando jugadores... (mínimo 2)</p>
+            ) : (
+              <p className="text-slate-500 text-center text-sm">Esperando a que el host inicie la partida...</p>
+            )}
+          </div>
+        ) : null}
+      </div>
+      {notif && (
+        <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:40,background:"#1e293b",border:"1px solid rgba(212,168,83,.5)",color:"#f0e6d3",padding:"12px 24px",borderRadius:16,boxShadow:"0 8px 32px rgba(0,0,0,.5)",fontSize:15,fontWeight:700,maxWidth:400,textAlign:"center"}}>
+          {notif}
+        </div>
+      )}
+    </div>
+  );
+
+  // ═══════════════════════════════════════════════
   //  RENDER: SETUP - PLAYER COUNT
   // ═══════════════════════════════════════════════
   if (phase === "count") return (
@@ -1020,7 +1271,7 @@ export default function CatanApp() {
             <div className="text-6xl mb-4">🏆</div>
             <h2 className="text-3xl font-bold text-amber-400 mb-2">¡{players[winner].name} gana!</h2>
             <p className="text-slate-300 text-lg mb-6">{finalScores[winner]} puntos de victoria</p>
-            <button onClick={() => { setPhase("count"); setWinner(null); setPlayers([]); setLog([]); setTurn(1); }}
+            <button onClick={() => { setPhase("lobby"); setMode(null); setGameId(null); setWinner(null); setPlayers([]); setLog([]); setTurn(1); }}
               className="px-6 py-3 bg-amber-500 text-white font-bold rounded-xl">Nueva partida</button>
           </div>
         </div>
@@ -1044,8 +1295,9 @@ export default function CatanApp() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {isOnline && <span className="text-xs bg-blue-900 text-blue-300 px-2 py-1 rounded-full">{gameId}</span>}
             {robber && <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">🦹 {robber}</span>}
-            {turnPhase === "rolled" && (
+            {turnPhase === "rolled" && isMyTurn && (
               <button onClick={endTurn}
                 className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-lg text-sm transition-all">
                 Fin turno →
@@ -1109,11 +1361,16 @@ export default function CatanApp() {
                   )}
                 </div>
                 {diceSum > 0 && <div style={{fontSize:48,fontWeight:900,color:"#f0d48a",textShadow:"0 2px 18px rgba(212,168,83,.4)",fontFamily:"'Cinzel',serif",textAlign:"center"}}>{diceSum}</div>}
-                {turnPhase === "preroll" && (
+                {turnPhase === "preroll" && isMyTurn && (
                   <button onClick={doRollDice}
                     style={{background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.15rem",padding:"16px 48px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 14px 34px rgba(212,168,83,.35)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"0 auto"}}>
                     🎲 Tirar dados
                   </button>
+                )}
+                {turnPhase === "preroll" && !isMyTurn && (
+                  <p style={{color:"rgba(240,230,211,.6)",fontWeight:700,fontSize:15,textAlign:"center",margin:0}}>
+                    Esperando a que {players[cp]?.name} tire los dados...
+                  </p>
                 )}
                 {turnPhase === "rolled" && diceSum > 0 && diceSum !== 7 && (
                   <p style={{color:"#f0e6d3",fontWeight:700,fontSize:15,letterSpacing:".2px",textAlign:"center",margin:0}}>{(lastDistribution?.num === diceSum && lastDistribution?.lines?.length > 0) ? "Recursos distribuidos. Podés construir, comerciar o terminar turno." : "Ningún jugador recibe recursos."}</p>
@@ -1212,7 +1469,7 @@ export default function CatanApp() {
             <div className="space-y-4">
               <h3 className="text-slate-300 font-semibold">Construcciones</h3>
               {Object.entries(COSTS).map(([type, cost]) => {
-                const canBuild = afford(cur.hand, cost) && turnPhase === "rolled";
+                const canBuild = afford(cur.hand, cost) && turnPhase === "rolled" && isMyTurn;
                 return (
                   <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
                     <div>
@@ -1273,7 +1530,7 @@ export default function CatanApp() {
                         <div className="flex gap-2 flex-wrap">
                           {RES.filter(r => r.id !== give.id).map(rec => (
                             <button key={rec.id} onClick={() => doTrade(give.id, rec.id, ratio)}
-                              disabled={turnPhase !== "rolled"}
+                              disabled={turnPhase !== "rolled" || !isMyTurn}
                               className={`${rec.bg} ${rec.tx} px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:opacity-80 active:scale-95`}>
                               {rec.e} {rec.n}
                             </button>
@@ -1291,8 +1548,8 @@ export default function CatanApp() {
               {/* Player trade */}
               <div className="bg-slate-800 rounded-2xl p-4">
                 <h3 className="text-slate-300 font-semibold mb-3">Comercio entre jugadores</h3>
-                <button onClick={() => { setTradeOther(cp === 0 ? 1 : 0); setTradeGive(eHand()); setTradeReceive(eHand()); setModal({ type: "playerTrade" }); }} disabled={turnPhase !== "rolled"}
-                  className={`w-full py-3 rounded-xl font-bold transition-all ${turnPhase === "rolled" ? "bg-blue-500 hover:bg-blue-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
+                <button onClick={() => { setTradeOther(cp === 0 ? 1 : 0); setTradeGive(eHand()); setTradeReceive(eHand()); setModal({ type: "playerTrade" }); }} disabled={turnPhase !== "rolled" || !isMyTurn}
+                  className={`w-full py-3 rounded-xl font-bold transition-all ${turnPhase === "rolled" && isMyTurn ? "bg-blue-500 hover:bg-blue-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
                   🤝 Proponer intercambio
                 </button>
               </div>
@@ -1339,7 +1596,7 @@ export default function CatanApp() {
                             <div className="text-slate-400 text-xs">{DC[c].d}</div>
                           </div>
                         </div>
-                        {c !== "victoria" && turnPhase === "rolled" && (
+                        {c !== "victoria" && turnPhase === "rolled" && isMyTurn && (
                           <button onClick={() => playDevCard(c, i)}
                             className="px-3 py-1.5 bg-purple-500 hover:bg-purple-400 text-white rounded-lg text-sm font-medium">
                             Jugar
