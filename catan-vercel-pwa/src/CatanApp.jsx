@@ -315,6 +315,7 @@ export default function CatanApp() {
   const [tab, setTab] = useState("dados");
   const [turn, setTurn] = useState(1);
   const [rolling, setRolling] = useState(false);
+  const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const [modal, setModal] = useState(null);
   const [winner, setWinner] = useState(null);
   // Freemium MVP: historial de tiradas (tipo ruleta)
@@ -417,32 +418,46 @@ export default function CatanApp() {
   };
 
   // ── GAME HANDLERS ──
+  const processRoll = (d1, d2, manual = false) => {
+    setDice([d1, d2]);
+    const sum = d1 + d2;
+    setDiceHistory(prev => [sum, ...prev].slice(0, 24));
+    addLog(manual
+      ? `✍️ ${players[cp].name} ingresó ${sum} manualmente`
+      : `🎲 ${players[cp].name} tiró ${d1} + ${d2} = ${sum}`);
+
+    if (sum === 7) {
+      const needDiscard = players.map((p, i) => ({ idx: i, total: totalC(p.hand) })).filter(x => x.total > 7);
+      if (needDiscard.length > 0) {
+        setModalDiscards(eHand());
+        setModal({ type: "discard", queue: needDiscard.map(x => x.idx), current: 0 });
+      } else {
+        setModal({ type: "robber" });
+      }
+      setTurnPhase("rolled");
+    } else {
+      distributeResources(sum);
+      setTurnPhase("rolled");
+    }
+  };
+
   const doRollDice = () => {
     setRolling(true);
     const d1 = rollDie(), d2 = rollDie();
     setTimeout(() => {
-      setDice([d1, d2]);
       setRolling(false);
-      const sum = d1 + d2;
-      setDiceHistory(prev => [sum, ...prev].slice(0, 24));
-      addLog(`🎲 ${players[cp].name} tiró ${d1} + ${d2} = ${sum}`);
-
-      if (sum === 7) {
-        // Check who needs to discard
-        const needDiscard = players.map((p, i) => ({ idx: i, total: totalC(p.hand) })).filter(x => x.total > 7);
-        if (needDiscard.length > 0) {
-          setModalDiscards(eHand());
-          setModal({ type: "discard", queue: needDiscard.map(x => x.idx), current: 0 });
-        } else {
-          setModal({ type: "robber" });
-        }
-        setTurnPhase("rolled");
-      } else {
-        // Distribute resources
-        distributeResources(sum);
-        setTurnPhase("rolled");
-      }
+      processRoll(d1, d2);
     }, 600);
+  };
+
+  const doManualRoll = (sum) => {
+    // pick a random valid pair (d1, d2) in [1..6] that sums to `sum`, for display
+    const min = Math.max(1, sum - 6);
+    const max = Math.min(6, sum - 1);
+    const d1 = min + Math.floor(Math.random() * (max - min + 1));
+    const d2 = sum - d1;
+    setManualPickerOpen(false);
+    processRoll(d1, d2, true);
   };
 
   const distributeResources = (num) => {
@@ -733,6 +748,7 @@ export default function CatanApp() {
     setCp(next);
     setTurnPhase("preroll");
     setDice([0, 0]);
+    setManualPickerOpen(false);
     if (next === 0) setTurn(t => t + 1);
     setTab("dados");
     addLog(`➡️ Turno de ${players[next].name}`);
@@ -1109,11 +1125,34 @@ export default function CatanApp() {
                   )}
                 </div>
                 {diceSum > 0 && <div style={{fontSize:48,fontWeight:900,color:"#f0d48a",textShadow:"0 2px 18px rgba(212,168,83,.4)",fontFamily:"'Cinzel',serif",textAlign:"center"}}>{diceSum}</div>}
-                {turnPhase === "preroll" && (
-                  <button onClick={doRollDice}
-                    style={{background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.15rem",padding:"16px 48px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 14px 34px rgba(212,168,83,.35)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"0 auto"}}>
-                    🎲 Tirar dados
-                  </button>
+                {turnPhase === "preroll" && !manualPickerOpen && (
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
+                    <button onClick={doRollDice}
+                      style={{background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.15rem",padding:"16px 48px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 14px 34px rgba(212,168,83,.35)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"0 auto"}}>
+                      🎲 Tirar dados
+                    </button>
+                    <button onClick={() => setManualPickerOpen(true)}
+                      style={{background:"transparent",color:"#d4a853",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:"0.92rem",padding:"6px 14px",borderRadius:10,border:"1px solid rgba(212,168,83,.35)",cursor:"pointer",textAlign:"center"}}>
+                      ✍️ Ingresar manual
+                    </button>
+                  </div>
+                )}
+                {turnPhase === "preroll" && manualPickerOpen && (
+                  <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)"}}>
+                    <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:12,textAlign:"center",letterSpacing:1}}>✍️ Ingresar número de dados</div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(6, 1fr)",gap:8,marginBottom:12}}>
+                      {Array.from({ length: 11 }, (_, k) => k + 2).map(n => (
+                        <button key={n} onClick={() => doManualRoll(n)}
+                          style={{padding:"12px 0",borderRadius:10,background:n===7?"linear-gradient(135deg,#b94a3c,#8a3528)":"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Cinzel',serif",fontWeight:800,fontSize:"1.1rem",border:"1px solid rgba(240,212,138,.4)",cursor:"pointer",boxShadow:"0 4px 12px rgba(0,0,0,.25)"}}>
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                    <button onClick={() => setManualPickerOpen(false)}
+                      style={{width:"100%",padding:"10px 14px",borderRadius:10,background:"rgba(100,116,139,.35)",border:"1px solid rgba(148,163,184,.4)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}}>
+                      Cancelar
+                    </button>
+                  </div>
                 )}
                 {turnPhase === "rolled" && diceSum > 0 && diceSum !== 7 && (
                   <p style={{color:"#f0e6d3",fontWeight:700,fontSize:15,letterSpacing:".2px",textAlign:"center",margin:0}}>{(lastDistribution?.num === diceSum && lastDistribution?.lines?.length > 0) ? "Recursos distribuidos. Podés construir, comerciar o terminar turno." : "Ningún jugador recibe recursos."}</p>
