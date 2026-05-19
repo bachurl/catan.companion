@@ -301,8 +301,17 @@ const ResBadge = ({ id, count, small }) => {
 // ═══════════════════════════════════════════════
 //  APP PRINCIPAL
 // ═══════════════════════════════════════════════
+// Game modes — flags wired into behavior in subsequent PRs.
+// "full":   classic experience (enforce build costs, track card counts, dev cards, etc.)
+// "simple": manual dice entry + free-form building, used as a lightweight scorekeeper.
+const GAME_MODES = {
+  full:   { enforceCosts: true,  trackCards: true,  trackDevCards: true  },
+  simple: { enforceCosts: false, trackCards: false, trackDevCards: false },
+};
+
 export default function CatanApp() {
-  const [phase, setPhase] = useState("count");
+  const [phase, setPhase] = useState("mode");
+  const [gameMode, setGameMode] = useState("full");
   const [pCount, setPCount] = useState(3);
   const [players, setPlayers] = useState([]);
   const [cp, setCp] = useState(0); // current player
@@ -792,6 +801,53 @@ export default function CatanApp() {
   // ═══════════════════════════════════════════════
   //  RENDER: SETUP - PLAYER COUNT
   // ═══════════════════════════════════════════════
+  // ═══════════════════════════════════════════════
+  //  RENDER: SETUP - MODE
+  // ═══════════════════════════════════════════════
+  if (phase === "mode") return (
+    <div className="catan-app">
+      <style>{STYLE_CSS}</style>
+      <div className="catan-container center-screen">
+        <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full text-center shadow-2xl border border-amber-600/30">
+          <div className="text-6xl mb-4">🏝️</div>
+          <h1 className="text-4xl font-bold text-amber-400 mb-2">Catán</h1>
+          <p className="text-slate-400 mb-6">Companion App</p>
+          <p className="text-slate-300 mb-5 text-lg">Elegí el modo de juego</p>
+          <div className="space-y-3 mb-6">
+            <button
+              onClick={() => setGameMode("full")}
+              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${gameMode === "full" ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:border-slate-600"}`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="text-3xl">🎯</div>
+                <div className="flex-1">
+                  <div className="font-bold text-amber-300 text-lg">Completo</div>
+                  <div className="text-slate-400 text-sm">Conteo de cartas, costos de construcción, descarte en 7, cartas de desarrollo.</div>
+                </div>
+              </div>
+            </button>
+            <button
+              onClick={() => setGameMode("simple")}
+              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${gameMode === "simple" ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:border-slate-600"}`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="text-3xl">✍️</div>
+                <div className="flex-1">
+                  <div className="font-bold text-amber-300 text-lg">Simple</div>
+                  <div className="text-slate-400 text-sm">Dado manual, distribución de cartas y construcciones libres para llevar el score.</div>
+                </div>
+              </div>
+            </button>
+          </div>
+          <button onClick={() => setPhase("count")}
+            className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
+            Siguiente →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (phase === "count") return (
     <div className="catan-app">
       <style>{STYLE_CSS}</style>
@@ -799,7 +855,8 @@ export default function CatanApp() {
         <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full text-center shadow-2xl border border-amber-600/30">
         <div className="text-6xl mb-4">🏝️</div>
         <h1 className="text-4xl font-bold text-amber-400 mb-2">Catán</h1>
-        <p className="text-slate-400 mb-8">Companion App</p>
+        <p className="text-slate-400 mb-2">Companion App</p>
+        <p className="text-amber-500/80 text-xs font-semibold uppercase tracking-wider mb-6">Modo {gameMode === "full" ? "Completo" : "Simple"}</p>
         <p className="text-slate-300 mb-4 text-lg">¿Cuántos jugadores?</p>
         <div className="flex gap-3 justify-center mb-8">
           {[2, 3, 4, 5, 6].map(n => (
@@ -812,6 +869,10 @@ export default function CatanApp() {
         <button onClick={initPlayers}
           className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
           Siguiente →
+        </button>
+        <button onClick={() => setPhase("mode")}
+          className="w-full mt-3 py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
+          ← Cambiar modo
         </button>
       </div>
       </div>
@@ -1020,7 +1081,7 @@ export default function CatanApp() {
             <div className="text-6xl mb-4">🏆</div>
             <h2 className="text-3xl font-bold text-amber-400 mb-2">¡{players[winner].name} gana!</h2>
             <p className="text-slate-300 text-lg mb-6">{finalScores[winner]} puntos de victoria</p>
-            <button onClick={() => { setPhase("count"); setWinner(null); setPlayers([]); setLog([]); setTurn(1); }}
+            <button onClick={() => { setPhase("mode"); setWinner(null); setPlayers([]); setLog([]); setTurn(1); }}
               className="px-6 py-3 bg-amber-500 text-white font-bold rounded-xl">Nueva partida</button>
           </div>
         </div>
@@ -1041,6 +1102,9 @@ export default function CatanApp() {
             <div>
               <span className="text-white font-bold">{cur.name}</span>
               <span className="text-slate-400 text-sm ml-2">Turno {turn}</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider ${gameMode === "simple" ? "bg-slate-700 text-slate-300" : "bg-amber-900/60 text-amber-300"}`}>
+                {gameMode === "simple" ? "Simple" : "Completo"}
+              </span>
             </div>
           </div>
           <div className="flex items-center gap-2">
