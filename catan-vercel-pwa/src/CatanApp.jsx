@@ -420,9 +420,8 @@ export default function CatanApp() {
       return { ...p, productions: prods };
     }));
     setDeck(shuffle([...INIT_DECK]));
-    const first = Math.floor(Math.random() * pCount);
-    setCp(first);
-    addLog(`🎲 Empieza ${players[first]?.name || "Jugador " + (first + 1)}. ¡A jugar!`);
+    setCp(0);
+    addLog(`🎲 Empieza ${players[0]?.name || "Jugador 1"}. ¡A jugar!`);
     setPhase("game");
   };
 
@@ -751,6 +750,22 @@ export default function CatanApp() {
     }
   };
 
+  const movePlayer = (idx, dir) => {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= players.length) return;
+    setPlayers(prev => {
+      const next = [...prev];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+    // Keep cp pointing at the same physical player after a swap.
+    setCp(prev => {
+      if (prev === idx) return newIdx;
+      if (prev === newIdx) return idx;
+      return prev;
+    });
+  };
+
   const endTurn = () => {
     setPlayers(prev => prev.map((p, i) => i === cp ? { ...p, devCardBought: [], devCardPlayed: false } : p));
     const next = (cp + 1) % players.length;
@@ -902,7 +917,8 @@ export default function CatanApp() {
     <div className="catan-app flex items-center justify-center p-4">
       <style>{STYLE_CSS}</style>
       <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full shadow-2xl border border-amber-600/30" style={{position:"relative",zIndex:1}}>
-        <h2 className="text-2xl font-bold text-amber-400 mb-6 text-center">Nombres y colores</h2>
+        <h2 className="text-2xl font-bold text-amber-400 mb-2 text-center">Nombres y colores</h2>
+        <p className="text-slate-400 text-xs text-center mb-5">El orden de la lista es el orden de turnos. Usá las flechas para reordenar.</p>
         <div className="space-y-3 mb-8">
           {players.map((p, i) => {
             const usedColors = players.map((pl, j) => j !== i ? pl.ci : -1).filter(c => c >= 0);
@@ -941,6 +957,22 @@ export default function CatanApp() {
                   }}
                   placeholder={`Jugador ${i + 1}`}
                 />
+                <div className="flex flex-col gap-1">
+                  <button
+                    onClick={() => movePlayer(i, -1)}
+                    disabled={i === 0}
+                    className={`w-7 h-7 rounded-md flex items-center justify-center text-sm font-bold transition-all ${i === 0 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
+                    title="Subir">
+                    ▲
+                  </button>
+                  <button
+                    onClick={() => movePlayer(i, 1)}
+                    disabled={i === players.length - 1}
+                    className={`w-7 h-7 rounded-md flex items-center justify-center text-sm font-bold transition-all ${i === players.length - 1 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
+                    title="Bajar">
+                    ▼
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -1470,10 +1502,26 @@ export default function CatanApp() {
                       {largestArmy === i && <span className="text-xs bg-purple-900 text-purple-300 px-2 py-0.5 rounded-full">⚔️ Ejército</span>}
                       {longestRoad === i && <span className="text-xs bg-amber-900 text-amber-300 px-2 py-0.5 rounded-full">🛤️ Camino</span>}
                     </div>
-                    <button onClick={() => addFreeSettlement(i)}
-                      className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg">
-                      + Poblado
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => addFreeSettlement(i)}
+                        className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg">
+                        + Poblado
+                      </button>
+                      <button
+                        onClick={() => movePlayer(i, -1)}
+                        disabled={i === 0}
+                        className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold ${i === 0 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
+                        title="Subir en el orden de turnos">
+                        ▲
+                      </button>
+                      <button
+                        onClick={() => movePlayer(i, 1)}
+                        disabled={i === players.length - 1}
+                        className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold ${i === players.length - 1 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
+                        title="Bajar en el orden de turnos">
+                        ▼
+                      </button>
+                    </div>
                   </div>
 
                   {/* Resources */}
