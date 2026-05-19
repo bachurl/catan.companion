@@ -1145,7 +1145,7 @@ export default function CatanApp() {
               <span className="text-amber-400 font-bold">{finalScores[i]}VP</span>
               {largestArmy === i && <span title="Ejército más grande">⚔️</span>}
               {longestRoad === i && <span title="Camino más largo">🛤️</span>}
-              <span className="text-slate-500 text-xs">({totalC(p.hand)}🃏)</span>
+              <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${totalC(p.hand) > 7 ? "bg-red-900/50 text-red-300" : "text-slate-400"}`} title={totalC(p.hand) > 7 ? "Más de 7 cartas: se descarta si sale 7" : "Cartas en mano"}>{totalC(p.hand)}🃏</span>
             </div>
           ))}
         </div>
@@ -1588,6 +1588,31 @@ export default function CatanApp() {
               return (
                 <div>
                   <h3 className="text-xl font-bold text-red-400 mb-2">🦹 ¡Salió 7!</h3>
+                  {/* Summary: who has too many cards and must discard */}
+                  <div className="bg-slate-900/60 border border-red-900/40 rounded-xl p-3 mb-4">
+                    <div className="text-xs font-bold uppercase tracking-wider text-red-300/80 mb-2">Descartes pendientes</div>
+                    <div className="flex flex-col gap-1.5">
+                      {modal.queue.map((qIdx, qPos) => {
+                        const qp = players[qIdx];
+                        const qTotal = totalC(qp.hand);
+                        const qMust = Math.floor(qTotal / 2);
+                        const done = qPos < modal.current;
+                        const active = qPos === modal.current;
+                        return (
+                          <div key={qIdx} className={`flex items-center justify-between text-sm rounded-lg px-2 py-1 ${active ? "bg-red-900/30 ring-1 ring-red-500/40" : done ? "opacity-50" : ""}`}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-3 h-3 rounded-full" style={{backgroundColor:COLORS[qp.ci].h}} />
+                              <span className="text-white font-semibold">{qp.name}</span>
+                              <span className="text-slate-400 text-xs">({qTotal}🃏)</span>
+                              {done && <span className="text-emerald-400 text-xs">✓</span>}
+                              {active && <span className="text-amber-300 text-xs font-bold">← ahora</span>}
+                            </div>
+                            <span className={`text-xs font-bold ${active ? "text-amber-300" : "text-slate-300"}`}>−{qMust}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                   <p className="text-slate-300 mb-1">{p.name} tiene {totalC(p.hand)} cartas.</p>
                   <p className="text-slate-400 text-sm mb-4">Debe descartar {mustDiscard} cartas ({discarded}/{mustDiscard})</p>
                   <div className="space-y-2 mb-4">
