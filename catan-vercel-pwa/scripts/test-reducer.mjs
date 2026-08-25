@@ -125,6 +125,14 @@ s = replayActions(actions);
 assert(s.players[0].name === "Beto" && s.players[1].name === "Ana", "orden intercambiado");
 assert(s.cp !== prevCp || prevCp > 1, "cp sigue al jugador físico");
 
+console.log("UNDO como marcador del log:");
+actions.push({ type: "UNDO", ts });
+s = replayActions(actions);
+assert(s.players[0].name === "Ana", "UNDO revierte el cambio de orden");
+actions.push({ type: "UNDO", ts });
+s = replayActions(actions);
+assert(s.players[0].knightsPlayed === 0, "segundo UNDO revierte el caballero jugado");
+
 console.log("Determinismo (replay dos veces = mismo estado):");
 const s1 = JSON.stringify(replayActions(actions));
 const s2 = JSON.stringify(replayActions(actions));

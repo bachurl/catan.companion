@@ -375,5 +375,17 @@ export function gameReducer(state, action) {
   }
 }
 
+// "UNDO" es un marcador en el log (no un case del reducer): al replayar,
+// cada UNDO anula la última acción efectiva anterior. Modelar el deshacer
+// como acción permite sincronizarlo en logs compartidos append-only.
+export const effectiveActions = (actions) => {
+  const eff = [];
+  for (const a of actions) {
+    if (a.type === "UNDO") eff.pop();
+    else eff.push(a);
+  }
+  return eff;
+};
+
 // Reconstruye el estado desde un log de acciones (persistencia, undo, sync).
-export const replayActions = (actions) => actions.reduce(gameReducer, initialGameState);
+export const replayActions = (actions) => effectiveActions(actions).reduce(gameReducer, initialGameState);
