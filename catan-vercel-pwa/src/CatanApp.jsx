@@ -5,10 +5,11 @@ import {
   RES, RM, NUMS, COSTS, COST_NAMES, COST_EMOJI, INIT_DECK, DC, COLORS,
   playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
 } from "./game/constants";
-import { computeGains, replayActions } from "./game/reducer";
+import { computeGains, replayActions, effectiveActions } from "./game/reducer";
 import { computeScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
 import { describeAction } from "./game/describe";
-import { useGameLog, loadSavedActions, clearSavedActions } from "./game/useGameLog";
+import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog";
+import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
 import { useWakeLock, vibrate } from "./useWakeLock";
 
 // ═══════════════════════════════════════════════
@@ -19,13 +20,29 @@ import { useWakeLock, vibrate } from "./useWakeLock";
 export default function CatanApp() {
   const { game, actions, dispatchAction, replaceActions, resetGame } = useGameLog();
 
+  // ── SALA ONLINE ──
+  // Acciones remotas se aplican con dispatchAction directo (sin re-publicar);
+  // onResync reemplaza el log entero con el orden canónico del servidor.
+  const online = useOnlineRoom({
+    onRemoteAction: dispatchAction,
+    onResync: replaceActions,
+  });
+
+  // Toda acción local pasa por acá: se aplica al instante y, si hay sala,
+  // se publica (con cola offline si no hay red).
+  const dispatch = useCallback((action) => {
+    const stamped = dispatchAction(action);
+    if (online.room) online.pushAction(stamped);
+    return stamped;
+  }, [dispatchAction, online.room, online.pushAction]);
+
   // Partida guardada pendiente de retomar (si existe y no terminó)
   const [savedGame, setSavedGame] = useState(() => {
-    const saved = loadSavedActions();
+    const saved = loadSavedGame();
     if (!saved) return null;
-    const state = replayActions(saved);
+    const state = replayActions(saved.actions);
     if (!state.started || isGameFinished(state)) return null;
-    return { actions: saved, state };
+    return { actions: saved.actions, state, roomCode: loadSavedRoomCode() };
   });
 
   // UI / setup state
@@ -42,6 +59,8 @@ export default function CatanApp() {
   const [modal, setModal] = useState(null);
   const [winner, setWinner] = useState(null);
   // Modal-level state (lifted to avoid hooks-in-IIFE)
+  const [joinCode, setJoinCode] = useState("");
+  const [joinBusy, setJoinBusy] = useState(false);
   const [modalDiscards, setModalDiscards] = useState(eHand());
   const [modalHexes, setModalHexes] = useState([{ num: "", res: "" }]);
   const [tradeOther, setTradeOther] = useState(0);
@@ -91,10 +110,20 @@ export default function CatanApp() {
   const continueSavedGame = () => {
     if (!savedGame) return;
     replaceActions(savedGame.actions);
-    setSavedGame(null);
     setWinner(null);
     setTab("dados");
     setPhase("game");
+    // Si la partida guardada era online, intenta reconectar a la sala:
+    // el servidor pisa el log local con el orden canónico + realtime.
+    if (savedGame.roomCode && online.isConfigured) {
+      online.joinRoom(savedGame.roomCode)
+        .then(({ actions: remoteActions }) => {
+          if (remoteActions.length > 0) replaceActions(remoteActions);
+          showNotif("🌐 Reconectado a la sala");
+        })
+        .catch(() => showNotif("No se pudo reconectar a la sala (seguís en modo local)"));
+    }
+    setSavedGame(null);
   };
 
   const discardSavedGame = () => {
@@ -131,7 +160,7 @@ export default function CatanApp() {
   };
 
   const startGame = () => {
-    dispatchAction({
+    dispatch({
       type: "START_GAME",
       mode: gameMode,
       players: setupPlayers.map(p => ({ name: p.name, ci: p.ci })),
@@ -145,6 +174,7 @@ export default function CatanApp() {
   };
 
   const newGame = () => {
+    online.leaveRoom();
     resetGame();
     setWinner(null);
     setSetupPlayers([]);
@@ -157,7 +187,7 @@ export default function CatanApp() {
   // ── GAME HANDLERS ──
   const processRoll = (d1, d2, manual = false) => {
     const sum = d1 + d2;
-    dispatchAction({ type: "ROLL", d1, d2, manual });
+    dispatch({ type: "ROLL", d1, d2, manual });
     vibrate(sum === 7 ? [70, 60, 140] : 60);
 
     if (sum === 7) {
@@ -202,11 +232,11 @@ export default function CatanApp() {
   };
 
   const applyDiscard = (playerIdx, discards) => {
-    dispatchAction({ type: "DISCARD", player: playerIdx, discards });
+    dispatch({ type: "DISCARD", player: playerIdx, discards });
   };
 
   const placeRobber = (num) => {
-    dispatchAction({ type: "PLACE_ROBBER", num });
+    dispatch({ type: "PLACE_ROBBER", num });
     // Check who to steal from
     const victims = [];
     players.forEach((p, i) => {
@@ -227,7 +257,7 @@ export default function CatanApp() {
     Object.entries(victim.hand).forEach(([r, v]) => { for (let i = 0; i < v; i++) cards.push(r); });
     if (cards.length === 0) { setModal(null); return; }
     const stolen = cards[Math.floor(Math.random() * cards.length)];
-    dispatchAction({ type: "STEAL", victim: victimIdx, res: stolen });
+    dispatch({ type: "STEAL", victim: victimIdx, res: stolen });
     showNotif(`Robaste ${RM[stolen].e} ${RM[stolen].n} a ${victim.name}`);
     setModal(null);
   };
@@ -253,7 +283,7 @@ export default function CatanApp() {
     if (mode.enforceCosts && !afford(players[cp].hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
 
     if (type === "camino") {
-      dispatchAction({ type: "BUILD_ROAD" });
+      dispatch({ type: "BUILD_ROAD" });
       showNotif("Camino construido");
     } else if (type === "poblado") {
       setModalHexes([{ num: "", res: "" }]);
@@ -263,30 +293,30 @@ export default function CatanApp() {
     } else if (type === "desarrollo") {
       if (deck.length === 0) { showNotif("No quedan cartas de desarrollo"); return; }
       const card = deck[0];
-      dispatchAction({ type: "BUY_DEV" });
+      dispatch({ type: "BUY_DEV" });
       showNotif(`Compraste: ${DC[card].e} ${DC[card].n}`);
     }
   };
 
   const addSettlement = (hexes) => {
-    dispatchAction({ type: "ADD_SETTLEMENT", hexes });
+    dispatch({ type: "ADD_SETTLEMENT", hexes });
     showNotif("Poblado construido");
     setModal(null);
   };
 
   const upgradeToCity = (gidVal) => {
-    dispatchAction({ type: "UPGRADE_CITY", gid: gidVal });
+    dispatch({ type: "UPGRADE_CITY", gid: gidVal });
     showNotif("Ciudad construida");
     setModal(null);
   };
 
   const doTrade = (give, receive, ratio) => {
-    dispatchAction({ type: "TRADE_BANK", give, receive, ratio });
+    dispatch({ type: "TRADE_BANK", give, receive, ratio });
     showNotif(`Cambiaste ${ratio} ${RM[give].n} por 1 ${RM[receive].n}`);
   };
 
   const doPlayerTrade = (otherIdx, give, receive) => {
-    dispatchAction({ type: "TRADE_PLAYER", other: otherIdx, give, receive });
+    dispatch({ type: "TRADE_PLAYER", other: otherIdx, give, receive });
     showNotif("Comercio realizado");
   };
 
@@ -300,7 +330,7 @@ export default function CatanApp() {
       return;
     }
 
-    dispatchAction({ type: "PLAY_DEV", card: cardType, cardIdx });
+    dispatch({ type: "PLAY_DEV", card: cardType, cardIdx });
     if (cardType === "caballero") {
       setModal({ type: "robber" });
     } else if (cardType === "monopolio") {
@@ -314,14 +344,14 @@ export default function CatanApp() {
 
   const applyMonopoly = (res) => {
     const stolen = players.reduce((acc, p, i) => i === cp ? acc : acc + p.hand[res], 0);
-    dispatchAction({ type: "MONOPOLY", res });
+    dispatch({ type: "MONOPOLY", res });
     showNotif(`Monopolio: robaste ${stolen} ${RM[res].n}`);
     setModal(null);
   };
 
   const applyYearOfPlenty = (res) => {
     const last = (modal?.picks || 0) >= 1;
-    dispatchAction({ type: "YEAR_OF_PLENTY", res, last });
+    dispatch({ type: "YEAR_OF_PLENTY", res, last });
     if (last) {
       showNotif("Abundancia: tomaste 2 recursos");
       setModal(null);
@@ -331,11 +361,11 @@ export default function CatanApp() {
   };
 
   const movePlayer = (idx, dir) => {
-    dispatchAction({ type: "MOVE_PLAYER", idx, dir });
+    dispatch({ type: "MOVE_PLAYER", idx, dir });
   };
 
   const endTurn = () => {
-    dispatchAction({ type: "END_TURN" });
+    dispatch({ type: "END_TURN" });
     setManualPickerOpen(false);
     setTab("dados");
   };
@@ -348,12 +378,12 @@ export default function CatanApp() {
   };
 
   const addPort = (port) => {
-    dispatchAction({ type: "ADD_PORT", port });
+    dispatch({ type: "ADD_PORT", port });
     showNotif(`Puerto ${port === "3:1" ? "3:1" : RM[port]?.n} agregado`);
   };
 
   const removePort = (port) => {
-    dispatchAction({ type: "REMOVE_PORT", port });
+    dispatch({ type: "REMOVE_PORT", port });
   };
 
   const addFreeSettlement = (playerIdx) => {
@@ -362,25 +392,54 @@ export default function CatanApp() {
   };
 
   const addFreeProductions = (playerIdx, hexes) => {
-    dispatchAction({ type: "ADD_FREE_SETTLEMENT", player: playerIdx, hexes });
+    dispatch({ type: "ADD_FREE_SETTLEMENT", player: playerIdx, hexes });
     showNotif("Poblado agregado");
     setModal(null);
   };
 
   const manualAdjust = (playerIdx, res, delta) => {
-    dispatchAction({ type: "MANUAL_ADJUST", player: playerIdx, res, delta });
+    dispatch({ type: "MANUAL_ADJUST", player: playerIdx, res, delta });
+  };
+
+  // ── ONLINE: crear / unirse / reconectar ──
+  const createOnlineRoom = async () => {
+    try {
+      const r = await online.createRoom(actions);
+      showNotif(`🌐 Sala creada: ${r.code}`);
+    } catch (e) {
+      showNotif(`No se pudo crear la sala: ${e.message}`);
+    }
+  };
+
+  const joinOnlineRoom = async (code) => {
+    if (!code.trim()) return;
+    setJoinBusy(true);
+    try {
+      const { actions: remoteActions } = await online.joinRoom(code);
+      if (remoteActions.length === 0) throw new Error("La sala está vacía.");
+      replaceActions(remoteActions);
+      setSavedGame(null);
+      setWinner(null);
+      setTab("dados");
+      setPhase("game");
+      showNotif("🌐 Conectado a la sala");
+    } catch (e) {
+      showNotif(e.message || "No se pudo conectar");
+    }
+    setJoinBusy(false);
   };
 
   // ── DESHACER ──
   // Recorta la última acción del log y replaya. Solo accesible sin modales
   // abiertos (el overlay bloquea el header), así no desincroniza flujos.
-  const canUndo = actions.length > 1; // START_GAME no se deshace
+  const canUndo = effectiveActions(actions).length > 1; // START_GAME no se deshace
   const requestUndo = () => {
     if (!canUndo) return;
     setModal({ type: "undo" });
   };
   const doUndo = () => {
-    replaceActions(actions.slice(0, -1));
+    // El deshacer es una acción más en el log (se sincroniza online).
+    dispatch({ type: "UNDO" });
     setManualPickerOpen(false);
     setModal(null);
     showNotif("↩️ Última acción deshecha");
@@ -454,6 +513,27 @@ export default function CatanApp() {
             className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
             Siguiente →
           </button>
+
+          {online.isConfigured && (
+            <div className="mt-6 pt-5 border-t border-slate-700/60">
+              <p className="text-slate-400 text-sm mb-2">🌐 ¿Te invitaron a una partida?</p>
+              <div className="flex gap-2">
+                <input
+                  value={joinCode}
+                  onChange={e => setJoinCode(e.target.value.toUpperCase())}
+                  placeholder="CÓDIGO"
+                  maxLength={6}
+                  className="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-white text-center font-bold tracking-[.3em] uppercase focus:border-amber-500 focus:outline-none"
+                />
+                <button
+                  onClick={() => joinOnlineRoom(joinCode)}
+                  disabled={joinBusy || joinCode.trim().length < 4}
+                  className="px-4 py-2.5 bg-blue-500 hover:bg-blue-400 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold rounded-xl transition-all">
+                  {joinBusy ? "..." : "Unirse"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -740,6 +820,16 @@ export default function CatanApp() {
           </div>
           <div className="flex items-center gap-2">
             {robber && <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">🦹 {robber}</span>}
+            {online.isConfigured && (
+              <button onClick={() => setModal({ type: "online" })}
+                className="relative w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded-lg text-base transition-all"
+                title={online.room ? `Sala ${online.room.code}` : "Jugar online"}>
+                🌐
+                {online.room && (
+                  <span className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-slate-800 ${online.connected ? "bg-emerald-400" : "bg-red-500"}`} />
+                )}
+              </button>
+            )}
             {canUndo && (
               <button onClick={requestUndo}
                 className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-base transition-all"
@@ -919,18 +1009,28 @@ export default function CatanApp() {
                 )}
               </div>
 
-              {/* Current player hand */}
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <h3 className="text-slate-300 font-semibold mb-3">Tu mano ({totalC(cur.hand)} cartas)</h3>
-                <div className="flex flex-wrap gap-2">
-                  {RES.map(r => (
-                    <div key={r.id} className={`${r.bg} ${r.tx} px-3 py-2 rounded-xl flex items-center gap-2 font-bold`}>
-                      <span>{r.e}</span>
-                      <span className="text-lg">{cur.hand[r.id]}</span>
+              {/* Current player hand (o la mano reclamada en una sala online) */}
+              {(() => {
+                const handOwner = online.myPlayerIndex !== null && players[online.myPlayerIndex]
+                  ? players[online.myPlayerIndex] : cur;
+                const isMyTurn = online.myPlayerIndex !== null && online.myPlayerIndex === cp;
+                return (
+                  <div className={`bg-slate-800 rounded-2xl p-4 ${isMyTurn ? "ring-2 ring-amber-400" : ""}`}>
+                    <h3 className="text-slate-300 font-semibold mb-3">
+                      {online.myPlayerIndex !== null ? `Tu mano — ${handOwner.name}` : "Tu mano"} ({totalC(handOwner.hand)} cartas)
+                      {isMyTurn && <span className="ml-2 text-amber-400 text-xs font-bold">¡TU TURNO!</span>}
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                      {RES.map(r => (
+                        <div key={r.id} className={`${r.bg} ${r.tx} px-3 py-2 rounded-xl flex items-center gap-2 font-bold`}>
+                          <span>{r.e}</span>
+                          <span className="text-lg">{handOwner.hand[r.id]}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -1181,10 +1281,70 @@ export default function CatanApp() {
         <div className="fixed inset-0 bg-black/70 z-40 flex items-end sm:items-center justify-center p-4">
           <div className="bg-slate-800 rounded-t-3xl sm:rounded-3xl p-6 w-full max-w-md max-h-[85vh] overflow-y-auto border border-slate-600">
 
+            {/* Online room */}
+            {modal.type === "online" && (
+              <div>
+                <h3 className="text-xl font-bold text-blue-400 mb-2">🌐 Partida online</h3>
+                {!online.room ? (
+                  <div>
+                    <p className="text-slate-300 text-sm mb-4">
+                      Creá una sala para que los demás sigan la partida desde su celular:
+                      van a ver el estado en vivo y cada uno puede controlar su jugador.
+                    </p>
+                    <button onClick={createOnlineRoom}
+                      className="w-full py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl mb-2">
+                      Crear sala
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="bg-slate-900/70 border border-blue-500/40 rounded-2xl p-4 mb-4 text-center">
+                      <p className="text-slate-400 text-xs mb-1 uppercase tracking-wider">Código para unirse</p>
+                      <p className="text-3xl font-black text-blue-300 tracking-[.35em]">{online.room.code}</p>
+                      <p className={`text-xs mt-2 font-semibold ${online.connected ? "text-emerald-400" : "text-red-400"}`}>
+                        {online.connected ? "● Conectado" : "● Sin conexión"}
+                        {online.pendingCount > 0 && ` · ${online.pendingCount} acción(es) por sincronizar`}
+                      </p>
+                    </div>
+
+                    <p className="text-slate-300 text-sm font-semibold mb-2">¿Qué jugador sos?</p>
+                    <div className="space-y-2 mb-4">
+                      {players.map((p, i) => {
+                        const owner = online.members.find(m => m.player_index === i);
+                        const isMine = online.myPlayerIndex === i;
+                        const taken = owner && owner.user_id !== online.userId;
+                        return (
+                          <button key={i}
+                            disabled={taken}
+                            onClick={() => online.claimPlayer(isMine ? null : i, p.name)}
+                            className={`w-full py-2.5 px-3 rounded-xl flex items-center gap-3 text-sm font-semibold transition-all ${isMine ? "bg-blue-500/25 ring-1 ring-blue-400 text-white" : taken ? "bg-slate-700/50 text-slate-500 cursor-not-allowed" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
+                            <span className="w-4 h-4 rounded-full" style={{backgroundColor: COLORS[p.ci].h}} />
+                            <span>{p.name}</span>
+                            {isMine && <span className="ml-auto text-blue-300 text-xs">✓ vos</span>}
+                            {taken && <span className="ml-auto text-slate-500 text-xs">ocupado</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <button onClick={() => { online.leaveRoom(); showNotif("Saliste de la sala (la partida sigue local)"); }}
+                      className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-400 rounded-xl text-sm mb-2">
+                      Salir de la sala
+                    </button>
+                  </div>
+                )}
+                <button onClick={() => setModal(null)} className="w-full py-3 bg-slate-700 text-slate-300 rounded-xl font-bold mt-1">
+                  Cerrar
+                </button>
+              </div>
+            )}
+
             {/* Undo confirmation */}
             {modal.type === "undo" && (() => {
-              const last = actions[actions.length - 1];
-              const preState = replayActions(actions.slice(0, -1));
+              const eff = effectiveActions(actions);
+              const last = eff[eff.length - 1];
+              // Estado tal como quedaría después del undo = estado previo a `last`.
+              const preState = replayActions([...actions, { type: "UNDO" }]);
               return (
                 <div>
                   <h3 className="text-xl font-bold text-amber-400 mb-2">↩️ Deshacer última acción</h3>
