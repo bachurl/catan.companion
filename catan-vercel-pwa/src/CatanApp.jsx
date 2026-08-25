@@ -301,17 +301,18 @@ const ResBadge = ({ id, count, small }) => {
 // ═══════════════════════════════════════════════
 //  APP PRINCIPAL
 // ═══════════════════════════════════════════════
-// Game modes — flags wired into behavior in subsequent PRs.
-// "full":   classic experience (enforce build costs, track card counts, dev cards, etc.)
+// Game modes
+// "full":   classic experience (enforce build costs, dev cards, etc.)
 // "simple": manual dice entry + free-form building, used as a lightweight scorekeeper.
 const GAME_MODES = {
-  full:   { enforceCosts: true,  trackCards: true,  trackDevCards: true  },
-  simple: { enforceCosts: false, trackCards: false, trackDevCards: false },
+  full:   { enforceCosts: true,  manualDiceOnly: false, showDevCards: true  },
+  simple: { enforceCosts: false, manualDiceOnly: true,  showDevCards: false },
 };
 
 export default function CatanApp() {
   const [phase, setPhase] = useState("mode");
   const [gameMode, setGameMode] = useState("full");
+  const mode = GAME_MODES[gameMode];
   const [pCount, setPCount] = useState(3);
   const [players, setPlayers] = useState([]);
   const [cp, setCp] = useState(0); // current player
@@ -568,27 +569,29 @@ export default function CatanApp() {
 
   // Freemium MVP: construir con confirmación + error claro
   const requestBuild = (type) => {
-    if (turnPhase !== "rolled") {
-      showNotif("Primero tirá los dados (y esperá a que se distribuyan recursos)");
-      return;
-    }
-    const cost = COSTS[type];
-    if (!afford(players[cp].hand, cost)) {
-      showNotif("No se puede: te faltan recursos");
-      return;
+    if (mode.enforceCosts) {
+      if (turnPhase !== "rolled") {
+        showNotif("Primero tirá los dados (y esperá a que se distribuyan recursos)");
+        return;
+      }
+      const cost = COSTS[type];
+      if (!afford(players[cp].hand, cost)) {
+        showNotif("No se puede: te faltan recursos");
+        return;
+      }
     }
     setModal({ type: "confirmBuild", buildType: type });
   };
 
   const doBuild = (type) => {
     const cost = COSTS[type];
-    if (!afford(players[cp].hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
+    if (mode.enforceCosts && !afford(players[cp].hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
 
     if (type === "camino") {
       setPlayers(prev => prev.map((p, i) => {
         if (i !== cp) return p;
         const nh = { ...p.hand };
-        Object.entries(cost).forEach(([r, v]) => { nh[r] -= v; });
+        if (mode.enforceCosts) Object.entries(cost).forEach(([r, v]) => { nh[r] -= v; });
         return { ...p, hand: nh, roadsBuilt: p.roadsBuilt + 1 };
       }));
       addLog(`🛤️ ${players[cp].name} construyó un camino (total: ${players[cp].roadsBuilt + 1})`);
@@ -603,7 +606,7 @@ export default function CatanApp() {
       setPlayers(prev => prev.map((p, i) => {
         if (i !== cp) return p;
         const nh = { ...p.hand };
-        Object.entries(cost).forEach(([r, v]) => { nh[r] -= v; });
+        if (mode.enforceCosts) Object.entries(cost).forEach(([r, v]) => { nh[r] -= v; });
         const card = deck[0];
         return { ...p, hand: nh, devCards: [...p.devCards, card], devCardBought: [...p.devCardBought, card] };
       }));
@@ -619,7 +622,7 @@ export default function CatanApp() {
     setPlayers(prev => prev.map((p, i) => {
       if (i !== cp) return p;
       const nh = { ...p.hand };
-      Object.entries(COSTS.poblado).forEach(([r, v]) => { nh[r] -= v; });
+      if (mode.enforceCosts) Object.entries(COSTS.poblado).forEach(([r, v]) => { nh[r] -= v; });
       const newProds = hexes.filter(h => h.num && h.res).map(h => ({
         id: gid(), num: parseInt(h.num), res: h.res, isCity: false, gid: gidVal,
       }));
@@ -634,7 +637,7 @@ export default function CatanApp() {
     setPlayers(prev => prev.map((p, i) => {
       if (i !== cp) return p;
       const nh = { ...p.hand };
-      Object.entries(COSTS.ciudad).forEach(([r, v]) => { nh[r] -= v; });
+      if (mode.enforceCosts) Object.entries(COSTS.ciudad).forEach(([r, v]) => { nh[r] -= v; });
       return {
         ...p, hand: nh,
         productions: p.productions.map(pr => pr.gid === gidVal ? { ...pr, isCity: true } : pr),
@@ -1070,10 +1073,10 @@ export default function CatanApp() {
     { id: "dados", label: "Dados", e: "🎲" },
     { id: "construir", label: "Construir", e: "🏗️" },
     { id: "comerciar", label: "Comerciar", e: "🔄" },
-    { id: "cartas", label: "Cartas", e: "🃏" },
+    { id: "cartas", label: "Cartas", e: "🃏", hideInSimple: true },
     { id: "jugadores", label: "Jugadores", e: "👥" },
     { id: "log", label: "Log", e: "📋" },
-  ];
+  ].filter(t => mode.showDevCards || !t.hideInSimple);
 
   // Group settlements for display
   const getSettlementGroups = (p) => {
@@ -1189,7 +1192,7 @@ export default function CatanApp() {
                   )}
                 </div>
                 {diceSum > 0 && <div style={{fontSize:48,fontWeight:900,color:"#f0d48a",textShadow:"0 2px 18px rgba(212,168,83,.4)",fontFamily:"'Cinzel',serif",textAlign:"center"}}>{diceSum}</div>}
-                {turnPhase === "preroll" && !manualPickerOpen && (
+                {turnPhase === "preroll" && !mode.manualDiceOnly && !manualPickerOpen && (
                   <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
                     <button onClick={doRollDice}
                       style={{background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.15rem",padding:"16px 48px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 14px 34px rgba(212,168,83,.35)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"0 auto"}}>
@@ -1201,7 +1204,7 @@ export default function CatanApp() {
                     </button>
                   </div>
                 )}
-                {turnPhase === "preroll" && manualPickerOpen && (
+                {turnPhase === "preroll" && (mode.manualDiceOnly || manualPickerOpen) && (
                   <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)"}}>
                     <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:12,textAlign:"center",letterSpacing:1}}>✍️ Ingresar número de dados</div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(6, 1fr)",gap:8,marginBottom:12}}>
@@ -1212,10 +1215,12 @@ export default function CatanApp() {
                         </button>
                       ))}
                     </div>
-                    <button onClick={() => setManualPickerOpen(false)}
-                      style={{width:"100%",padding:"10px 14px",borderRadius:10,background:"rgba(100,116,139,.35)",border:"1px solid rgba(148,163,184,.4)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}}>
-                      Cancelar
-                    </button>
+                    {!mode.manualDiceOnly && (
+                      <button onClick={() => setManualPickerOpen(false)}
+                        style={{width:"100%",padding:"10px 14px",borderRadius:10,background:"rgba(100,116,139,.35)",border:"1px solid rgba(148,163,184,.4)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}}>
+                        Cancelar
+                      </button>
+                    )}
                   </div>
                 )}
                 {turnPhase === "rolled" && diceSum > 0 && diceSum !== 7 && (
@@ -1314,17 +1319,21 @@ export default function CatanApp() {
           {tab === "construir" && (
             <div className="space-y-4">
               <h3 className="text-slate-300 font-semibold">Construcciones</h3>
-              {Object.entries(COSTS).map(([type, cost]) => {
-                const canBuild = afford(cur.hand, cost) && turnPhase === "rolled";
+              {Object.entries(COSTS)
+                .filter(([type]) => mode.showDevCards || type !== "desarrollo")
+                .map(([type, cost]) => {
+                const canBuild = mode.enforceCosts ? (afford(cur.hand, cost) && turnPhase === "rolled") : true;
                 return (
                   <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
                     <div>
                       <div className="text-white font-bold">{COST_EMOJI[type]} {COST_NAMES[type]}</div>
-                      <div className="flex gap-1 mt-1">
-                        {Object.entries(cost).map(([r, v]) => (
-                          <ResBadge key={r} id={r} count={v} small />
-                        ))}
-                      </div>
+                      {mode.enforceCosts && (
+                        <div className="flex gap-1 mt-1">
+                          {Object.entries(cost).map(([r, v]) => (
+                            <ResBadge key={r} id={r} count={v} small />
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <button onClick={() => requestBuild(type)} disabled={!canBuild}
                       className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${canBuild ? "bg-green-500 hover:bg-green-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
@@ -1547,14 +1556,16 @@ export default function CatanApp() {
                   <p className="text-slate-300 text-sm mb-4">
                     Vas a construir <span className="font-semibold text-white">{COST_EMOJI[type]} {COST_NAMES[type]}</span>.
                   </p>
-                  <div className="bg-slate-700/50 rounded-2xl p-4 mb-4">
-                    <div className="text-slate-300 text-sm mb-2">Costo:</div>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(cost).map(([r, v]) => (
-                        <ResBadge key={r} id={r} count={v} />
-                      ))}
+                  {mode.enforceCosts && (
+                    <div className="bg-slate-700/50 rounded-2xl p-4 mb-4">
+                      <div className="text-slate-300 text-sm mb-2">Costo:</div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(cost).map(([r, v]) => (
+                          <ResBadge key={r} id={r} count={v} />
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
                   <div className="flex gap-2">
                     <button onClick={() => setModal(null)} className="flex-1 py-3 bg-slate-700 text-slate-300 rounded-xl font-bold">
                       Cancelar
