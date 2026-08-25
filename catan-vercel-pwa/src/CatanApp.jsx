@@ -5,8 +5,9 @@ import {
   RES, RM, NUMS, COSTS, COST_NAMES, COST_EMOJI, INIT_DECK, DC, COLORS,
   playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
 } from "./game/constants";
-import { computeGains } from "./game/reducer";
-import { useGameLog } from "./game/useGameLog";
+import { computeGains, replayActions } from "./game/reducer";
+import { computeScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
+import { useGameLog, loadSavedActions, clearSavedActions } from "./game/useGameLog";
 
 // ═══════════════════════════════════════════════
 //  APP PRINCIPAL
@@ -14,7 +15,16 @@ import { useGameLog } from "./game/useGameLog";
 //  Acá queda solo el estado de UI: fase de setup, tabs, modales, notifs.
 // ═══════════════════════════════════════════════
 export default function CatanApp() {
-  const { game, dispatchAction, resetGame } = useGameLog();
+  const { game, dispatchAction, replaceActions, resetGame } = useGameLog();
+
+  // Partida guardada pendiente de retomar (si existe y no terminó)
+  const [savedGame, setSavedGame] = useState(() => {
+    const saved = loadSavedActions();
+    if (!saved) return null;
+    const state = replayActions(saved);
+    if (!state.started || isGameFinished(state)) return null;
+    return { actions: saved, state };
+  });
 
   // UI / setup state
   const [phase, setPhase] = useState("mode");
@@ -47,28 +57,9 @@ export default function CatanApp() {
   }, []);
 
   // ── SCORES (derivados del estado del juego) ──
-  const scores = useMemo(() => players.map(p => {
-    const grp = {};
-    p.productions.forEach(pr => {
-      if (!grp[pr.gid]) grp[pr.gid] = false;
-      if (pr.isCity) grp[pr.gid] = true;
-    });
-    const sett = Object.values(grp).filter(c => !c).length;
-    const cit = Object.values(grp).filter(c => c).length;
-    return sett + cit * 2 + p.devCards.filter(c => c === "victoria").length;
-  }), [players]);
-
-  const largestArmy = useMemo(() => {
-    let best = -1, who = null;
-    players.forEach((p, i) => { if (p.knightsPlayed >= 3 && p.knightsPlayed > best) { best = p.knightsPlayed; who = i; } });
-    return who;
-  }, [players]);
-
-  const longestRoad = useMemo(() => {
-    let best = -1, who = null;
-    players.forEach((p, i) => { if (p.roadsBuilt >= 5 && p.roadsBuilt > best) { best = p.roadsBuilt; who = i; } });
-    return who;
-  }, [players]);
+  const scores = useMemo(() => computeScores(players), [players]);
+  const largestArmy = useMemo(() => computeLargestArmy(players), [players]);
+  const longestRoad = useMemo(() => computeLongestRoad(players), [players]);
 
   const finalScores = useMemo(() => scores.map((s, i) => {
     let v = s;
@@ -87,9 +78,24 @@ export default function CatanApp() {
 
   // ── CHECK WIN ──
   useEffect(() => {
-    const w = finalScores.findIndex(s => s >= 10);
+    const w = finalScores.findIndex(s => s >= WINNING_SCORE);
     if (w >= 0 && winner === null) setWinner(w);
   }, [finalScores, winner]);
+
+  // ── CONTINUAR PARTIDA ──
+  const continueSavedGame = () => {
+    if (!savedGame) return;
+    replaceActions(savedGame.actions);
+    setSavedGame(null);
+    setWinner(null);
+    setTab("dados");
+    setPhase("game");
+  };
+
+  const discardSavedGame = () => {
+    clearSavedActions();
+    setSavedGame(null);
+  };
 
   // ── SETUP HANDLERS ──
   const initPlayers = () => {
@@ -127,6 +133,7 @@ export default function CatanApp() {
       settlements: setupData,
       deck: shuffle([...INIT_DECK]),
     });
+    setSavedGame(null);
     setWinner(null);
     setTab("dados");
     setPhase("game");
@@ -369,6 +376,32 @@ export default function CatanApp() {
           <div className="text-6xl mb-4">🏝️</div>
           <h1 className="text-4xl font-bold text-amber-400 mb-2">Catán</h1>
           <p className="text-slate-400 mb-6">Companion App</p>
+
+          {savedGame && (
+            <div className="mb-6 p-4 rounded-2xl border-2 border-emerald-500/60 bg-emerald-500/10 text-left">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-2xl">💾</span>
+                <span className="font-bold text-emerald-300">Partida en curso</span>
+              </div>
+              <p className="text-slate-300 text-sm mb-1">
+                {savedGame.state.players.map(p => p.name).join(", ")}
+              </p>
+              <p className="text-slate-400 text-xs mb-3">
+                Turno {savedGame.state.turn} · Modo {savedGame.state.gameMode === "simple" ? "Simple" : "Completo"}
+              </p>
+              <div className="flex gap-2">
+                <button onClick={continueSavedGame}
+                  className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-white font-bold rounded-xl transition-all">
+                  ▶️ Continuar
+                </button>
+                <button onClick={discardSavedGame}
+                  className="py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-semibold rounded-xl transition-all">
+                  Descartar
+                </button>
+              </div>
+            </div>
+          )}
+
           <p className="text-slate-300 mb-5 text-lg">Elegí el modo de juego</p>
           <div className="space-y-3 mb-6">
             <button
