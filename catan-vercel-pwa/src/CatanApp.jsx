@@ -9,6 +9,7 @@ import { computeGains, replayActions } from "./game/reducer";
 import { computeScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
 import { describeAction } from "./game/describe";
 import { useGameLog, loadSavedActions, clearSavedActions } from "./game/useGameLog";
+import { useWakeLock, vibrate } from "./useWakeLock";
 
 // ═══════════════════════════════════════════════
 //  APP PRINCIPAL
@@ -50,6 +51,9 @@ export default function CatanApp() {
 
   const { players, cp, turnPhase, dice, deck, robber, turn, diceHistory, lastDistribution, log } = game;
   const mode = GAME_MODES[game.started ? game.gameMode : gameMode];
+
+  // La pantalla no se apaga durante la partida (se libera al terminar).
+  useWakeLock(phase === "game" && game.started && winner === null);
 
   const showNotif = useCallback((msg, dur = 3000) => {
     setNotif(msg);
@@ -154,6 +158,7 @@ export default function CatanApp() {
   const processRoll = (d1, d2, manual = false) => {
     const sum = d1 + d2;
     dispatchAction({ type: "ROLL", d1, d2, manual });
+    vibrate(sum === 7 ? [70, 60, 140] : 60);
 
     if (sum === 7) {
       // Un 7 no modifica manos hasta el descarte, así que `players` (pre-acción) sirve.
