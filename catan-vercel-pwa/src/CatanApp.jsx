@@ -7,6 +7,7 @@ import {
 } from "./game/constants";
 import { computeGains, replayActions } from "./game/reducer";
 import { computeScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
+import { describeAction } from "./game/describe";
 import { useGameLog, loadSavedActions, clearSavedActions } from "./game/useGameLog";
 
 // ═══════════════════════════════════════════════
@@ -15,7 +16,7 @@ import { useGameLog, loadSavedActions, clearSavedActions } from "./game/useGameL
 //  Acá queda solo el estado de UI: fase de setup, tabs, modales, notifs.
 // ═══════════════════════════════════════════════
 export default function CatanApp() {
-  const { game, dispatchAction, replaceActions, resetGame } = useGameLog();
+  const { game, actions, dispatchAction, replaceActions, resetGame } = useGameLog();
 
   // Partida guardada pendiente de retomar (si existe y no terminó)
   const [savedGame, setSavedGame] = useState(() => {
@@ -363,6 +364,21 @@ export default function CatanApp() {
 
   const manualAdjust = (playerIdx, res, delta) => {
     dispatchAction({ type: "MANUAL_ADJUST", player: playerIdx, res, delta });
+  };
+
+  // ── DESHACER ──
+  // Recorta la última acción del log y replaya. Solo accesible sin modales
+  // abiertos (el overlay bloquea el header), así no desincroniza flujos.
+  const canUndo = actions.length > 1; // START_GAME no se deshace
+  const requestUndo = () => {
+    if (!canUndo) return;
+    setModal({ type: "undo" });
+  };
+  const doUndo = () => {
+    replaceActions(actions.slice(0, -1));
+    setManualPickerOpen(false);
+    setModal(null);
+    showNotif("↩️ Última acción deshecha");
   };
 
   // ═══════════════════════════════════════════════
@@ -719,6 +735,13 @@ export default function CatanApp() {
           </div>
           <div className="flex items-center gap-2">
             {robber && <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">🦹 {robber}</span>}
+            {canUndo && (
+              <button onClick={requestUndo}
+                className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-base transition-all"
+                title="Deshacer última acción">
+                ↩️
+              </button>
+            )}
             {turnPhase === "rolled" && (
               <button onClick={endTurn}
                 className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-lg text-sm transition-all">
@@ -1152,6 +1175,31 @@ export default function CatanApp() {
       {modal && (
         <div className="fixed inset-0 bg-black/70 z-40 flex items-end sm:items-center justify-center p-4">
           <div className="bg-slate-800 rounded-t-3xl sm:rounded-3xl p-6 w-full max-w-md max-h-[85vh] overflow-y-auto border border-slate-600">
+
+            {/* Undo confirmation */}
+            {modal.type === "undo" && (() => {
+              const last = actions[actions.length - 1];
+              const preState = replayActions(actions.slice(0, -1));
+              return (
+                <div>
+                  <h3 className="text-xl font-bold text-amber-400 mb-2">↩️ Deshacer última acción</h3>
+                  <p className="text-slate-300 text-sm mb-1">Se va a deshacer:</p>
+                  <div className="bg-slate-700/50 rounded-xl p-3 mb-4">
+                    <span className="text-white font-semibold">{describeAction(last, preState)}</span>
+                  </div>
+                  <p className="text-slate-400 text-xs mb-4">El estado del juego vuelve exactamente a como estaba antes de esa acción.</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setModal(null)} className="flex-1 py-3 bg-slate-700 text-slate-300 rounded-xl font-bold">
+                      Cancelar
+                    </button>
+                    <button onClick={doUndo}
+                      className="flex-1 py-3 bg-amber-500 hover:bg-amber-400 text-white rounded-xl font-bold">
+                      Deshacer
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Confirm build */}
             {modal.type === "confirmBuild" && (() => {
