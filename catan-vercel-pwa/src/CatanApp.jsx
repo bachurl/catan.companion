@@ -1,338 +1,34 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-
-const STYLE_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Nunito:wght@400;600;700;800&display=swap');
-
-:root{
-  --wood:#8B4513; --brick:#C0392B; --wheat:#F4D03F; --sheep:#27AE60; --ore:#7F8C8D;
-  --bg:#1a0f0a; --bg2:#2c1810; --bg3:#3d2317;
-  --gold:#d4a853; --gold-light:#f0d48a;
-  --text:#f0e6d3; --text-dim:#a89278;
-  --card-bg:rgba(44,24,16,.85);
-  --danger:#e74c3c; --success:#2ecc71;
-}
-
-.catan-app{
-  min-height:100vh;
-  background:linear-gradient(to bottom, #78350f, #92400e, #713f12);
-  color:var(--text);
-  font-family:'Nunito',system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial;
-  position:relative;
-}
-
-.catan-app::before{
-  content:'';
-  position:fixed;
-  inset:0;
-  background:
-    radial-gradient(ellipse at 20% 20%, rgba(212,168,83,0.08) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 80%, rgba(139,69,19,0.10) 0%, transparent 50%),
-    url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 0L60 17.32v34.64L30 60 0 51.96V17.32z' fill='none' stroke='rgba(212,168,83,0.04)' stroke-width='1'/%3E%3C/svg%3E");
-  pointer-events:none;
-  z-index:0;
-}
-
-.catan-container{
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 16px;
-  position:relative;
-  z-index:1;
-}
-
-.center-screen{
-  min-height:100vh;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-}
-
-.catan-title{
-  font-family:'Cinzel',serif;
-  letter-spacing:4px;
-  color:var(--gold);
-  text-shadow:0 2px 20px rgba(212,168,83,.25);
-}
-
-.panel{
-  background:var(--card-bg);
-  border:1px solid rgba(212,168,83,.15);
-  border-radius:16px;
-  padding:18px;
-  backdrop-filter: blur(10px);
-}
-
-.panel-title{
-  font-family:'Cinzel',serif;
-  color:var(--gold);
-  display:flex;
-  align-items:center;
-  gap:10px;
-}
-
-.btn{
-  font-weight:800;
-  border:none;
-  border-radius:12px;
-  padding:12px 18px;
-  cursor:pointer;
-  transition:all .2s;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:8px;
-}
-
-.btn:active{ transform:scale(.97); }
-
-.btn-primary{
-  background:linear-gradient(135deg,var(--gold),#b8902e);
-  color:#fff;
-  border:1px solid rgba(240,212,138,.55);
-  box-shadow:0 10px 30px rgba(212,168,83,.30);
-  font-size:1.15rem;
-  padding:16px 32px;
-  text-shadow:0 1px 3px rgba(0,0,0,.4);
-}
-
-
-.btn-secondary{
-  background:var(--bg3);
-  color:var(--gold);
-  border:1px solid rgba(212,168,83,.30);
-}
-
-.die{
-  width:72px; height:72px;
-  background:linear-gradient(145deg,#faf3e6,#e8dcc8);
-  border-radius:16px;
-  display:flex; align-items:center; justify-content:center;
-  font-family:'Cinzel',serif;
-  font-size:2rem; font-weight:900;
-  color:var(--bg);
-  box-shadow:0 6px 20px rgba(0,0,0,.4), inset 0 2px 4px rgba(255,255,255,.3);
-}
-
-.distribution-item{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  padding:10px 12px;
-  border-radius:12px;
-  background:rgba(46,204,113,.14);
-  border:1px solid rgba(46,204,113,.18);
-  border-left:3px solid var(--success);
-  color:var(--text);
-}
-
-
-.log-entry{
-  font-size:.85rem;
-  padding:8px 10px;
-  border-bottom:1px solid rgba(212,168,83,.06);
-  color:var(--text-dim);
-}
-
-.log-entry b{ color:var(--gold); font-weight:800; }
-
-.roll-status{color:rgba(240,230,211,.82);} 
-
-.quick-nav{
-  width:100%;
-  padding:18px 16px;
-  border-radius:16px;
-  background:rgba(0,0,0,.08);
-  border:2px solid rgba(240,212,138,.55);
-  color:var(--text);
-  font-weight:900;
-  font-size:18px;
-  letter-spacing:.2px;
-  transition:all .15s ease;
-}
-.quick-nav:hover{
-  background:rgba(212,168,83,.12);
-  border-color:rgba(240,212,138,.85);
-}
-
-
-/* --- Contrast & no-tailwind critical UI --- */
-.dice-sum{
-  font-size:44px;
-  font-weight:900;
-  color:var(--gold-light);
-  text-shadow:0 2px 18px rgba(212,168,83,.25);
-  margin-top:6px;
-}
-
-.die-unknown{
-  width:72px;
-  height:72px;
-  border-radius:16px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  background:rgba(255,255,255,.10);
-  border:1px solid rgba(240,212,138,.25);
-  color:rgba(240,230,211,.85);
-  font-size:30px;
-  font-weight:900;
-}
-
-.quick-actions{
-  width:100%;
-  max-width:720px;
-  margin:18px auto 0;
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:12px;
-}
-
-.roll-status{
-  color:rgba(240,230,211,.92);
-  font-weight:700;
-  letter-spacing:.2px;
-}
-
-.btn-primary{
-  box-shadow:0 14px 34px rgba(212,168,83,.35);
-}
-
-.quick-nav{
-  background:rgba(240,212,138,.16);
-  border:2px solid rgba(240,212,138,.85);
-  color:var(--text);
-  box-shadow:0 10px 26px rgba(0,0,0,.35);
-}
-
-.quick-nav:hover{
-  background:rgba(240,212,138,.24);
-}
-`;
-
-
-// ═══════════════════════════════════════════════
-//  CONSTANTES
-// ═══════════════════════════════════════════════
-const RES = [
-  { id: "madera", n: "Madera", e: "🌲", bg: "bg-green-700", tx: "text-green-100" },
-  { id: "ladrillo", n: "Ladrillo", e: "🧱", bg: "bg-red-700", tx: "text-red-100" },
-  { id: "trigo", n: "Trigo", e: "🌾", bg: "bg-yellow-600", tx: "text-yellow-100" },
-  { id: "oveja", n: "Oveja", e: "🐑", bg: "bg-lime-600", tx: "text-lime-100" },
-  { id: "mineral", n: "Mineral", e: "⛰️", bg: "bg-stone-600", tx: "text-stone-100" },
-];
-const RM = Object.fromEntries(RES.map(r => [r.id, r]));
-const NUMS = [2, 3, 4, 5, 6, 8, 9, 10, 11, 12];
-const COSTS = {
-  camino: { madera: 1, ladrillo: 1 },
-  poblado: { madera: 1, ladrillo: 1, trigo: 1, oveja: 1 },
-  ciudad: { mineral: 3, trigo: 2 },
-  desarrollo: { mineral: 1, trigo: 1, oveja: 1 },
-};
-const COST_NAMES = { camino: "Camino", poblado: "Poblado", ciudad: "Ciudad", desarrollo: "Carta Desarrollo" };
-const COST_EMOJI = { camino: "🛤️", poblado: "🏠", ciudad: "🏙️", desarrollo: "🃏" };
-
-const INIT_DECK = [
-  ...Array(14).fill("caballero"), ...Array(5).fill("victoria"),
-  ...Array(2).fill("caminos"), ...Array(2).fill("abundancia"), ...Array(2).fill("monopolio"),
-];
-const DC = {
-  caballero: { n: "Caballero", e: "⚔️", d: "Mové el ladrón y robá 1 carta" },
-  victoria: { n: "Punto de Victoria", e: "🏆", d: "+1 punto de victoria" },
-  caminos: { n: "Construcción", e: "🛤️", d: "Construí 2 caminos gratis" },
-  abundancia: { n: "Abundancia", e: "🎁", d: "Tomá 2 recursos del banco" },
-  monopolio: { n: "Monopolio", e: "👑", d: "Todos te dan un recurso" },
-};
-const COLORS = [
-  { n: "Azul", h: "#3b82f6", ring: "ring-blue-400" },
-  { n: "Rojo", h: "#ef4444", ring: "ring-red-400" },
-  { n: "Blanco", h: "#e2e8f0", ring: "ring-slate-300" },
-  { n: "Naranja", h: "#f97316", ring: "ring-orange-400" },
-  { n: "Verde", h: "#22c55e", ring: "ring-green-400" },
-  { n: "Violeta", h: "#a855f7", ring: "ring-purple-400" },
-];
-
-const COLOR_EMOJI = ["🔵","🔴","⚪","🟠","🟢","🟣"];
-const playerMark = (ci) => COLOR_EMOJI[ci] || "🔘";
-
-
-// ═══════════════════════════════════════════════
-//  UTILIDADES
-// ═══════════════════════════════════════════════
-const shuffle = a => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
-const rollDie = () => Math.floor(Math.random() * 6) + 1;
-const afford = (h, c) => Object.entries(c).every(([r, a]) => (h[r] || 0) >= a);
-const totalC = h => Object.values(h).reduce((a, b) => a + b, 0);
-const eHand = () => ({ madera: 0, ladrillo: 0, trigo: 0, oveja: 0, mineral: 0 });
-let _id = 1;
-const gid = () => _id++;
-
-const numberProb = n => { const d = Math.abs(7 - n); return 6 - d; };
-const dotStr = n => "•".repeat(numberProb(n));
-
-// Dice face SVG
-const DiceFace = ({ value, rolling }) => {
-  const dots = {
-    1: [[50,50]], 2: [[25,25],[75,75]], 3: [[25,25],[50,50],[75,75]],
-    4: [[25,25],[75,25],[25,75],[75,75]], 5: [[25,25],[75,25],[50,50],[25,75],[75,75]],
-    6: [[25,20],[75,20],[25,50],[75,50],[25,80],[75,80]],
-  };
-  return (
-    <div className={`w-16 h-16 bg-white rounded-xl shadow-lg flex items-center justify-center ${rolling ? "animate-bounce" : ""}`}>
-      <svg viewBox="0 0 100 100" className="w-12 h-12">
-        {(dots[value] || []).map(([x, y], i) => (
-          <circle key={i} cx={x} cy={y} r={10} fill="#1e293b" />
-        ))}
-      </svg>
-    </div>
-  );
-};
-
-// Resource badge
-const ResBadge = ({ id, count, small }) => {
-  const r = RM[id];
-  if (!r) return null;
-  return (
-    <span className={`inline-flex items-center gap-1 ${r.bg} ${r.tx} ${small ? "px-1.5 py-0.5 text-xs" : "px-2 py-1 text-sm"} rounded-full font-medium`}>
-      {r.e} {count !== undefined && <span>{count}</span>}
-    </span>
-  );
-};
+import { STYLE_CSS } from "./styles";
+import { DiceFace, ResBadge } from "./components";
+import {
+  RES, RM, NUMS, COSTS, COST_NAMES, COST_EMOJI, INIT_DECK, DC, COLORS,
+  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
+} from "./game/constants";
+import { computeGains } from "./game/reducer";
+import { useGameLog } from "./game/useGameLog";
 
 // ═══════════════════════════════════════════════
 //  APP PRINCIPAL
+//  El estado del juego vive en useGameLog (reducer + log de acciones).
+//  Acá queda solo el estado de UI: fase de setup, tabs, modales, notifs.
 // ═══════════════════════════════════════════════
-// Game modes
-// "full":   classic experience (enforce build costs, dev cards, etc.)
-// "simple": manual dice entry + free-form building, used as a lightweight scorekeeper.
-const GAME_MODES = {
-  full:   { enforceCosts: true,  manualDiceOnly: false, showDevCards: true  },
-  simple: { enforceCosts: false, manualDiceOnly: true,  showDevCards: false },
-};
-
 export default function CatanApp() {
+  const { game, dispatchAction, resetGame } = useGameLog();
+
+  // UI / setup state
   const [phase, setPhase] = useState("mode");
   const [gameMode, setGameMode] = useState("full");
-  const mode = GAME_MODES[gameMode];
   const [pCount, setPCount] = useState(3);
-  const [players, setPlayers] = useState([]);
-  const [cp, setCp] = useState(0); // current player
-  const [turnPhase, setTurnPhase] = useState("preroll");
-  const [dice, setDice] = useState([0, 0]);
-  const [deck, setDeck] = useState([]);
-  const [robber, setRobber] = useState(null); // blocked number
-  const [log, setLog] = useState([]);
+  const [setupPlayers, setSetupPlayers] = useState([]);
+  const [setupIdx, setSetupIdx] = useState(0);
+  const [setupData, setSetupData] = useState({});
   const [notif, setNotif] = useState(null);
   const [tab, setTab] = useState("dados");
-  const [turn, setTurn] = useState(1);
   const [rolling, setRolling] = useState(false);
   const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const [modal, setModal] = useState(null);
   const [winner, setWinner] = useState(null);
-  // Freemium MVP: historial de tiradas (tipo ruleta)
-  const [diceHistory, setDiceHistory] = useState([]); // array of sums, newest first
-  const [lastDistribution, setLastDistribution] = useState(null); // { num, lines: [{ci,name,items}] }
-  const [setupIdx, setSetupIdx] = useState(0);
-  const [setupData, setSetupData] = useState({});
   // Modal-level state (lifted to avoid hooks-in-IIFE)
   const [modalDiscards, setModalDiscards] = useState(eHand());
   const [modalHexes, setModalHexes] = useState([{ num: "", res: "" }]);
@@ -341,7 +37,8 @@ export default function CatanApp() {
   const [tradeReceive, setTradeReceive] = useState(eHand());
   const notifTimer = useRef(null);
 
-  const addLog = useCallback((msg) => setLog(l => [{ t: Date.now(), m: msg }, ...l].slice(0, 100)), []);
+  const { players, cp, turnPhase, dice, deck, robber, turn, diceHistory, lastDistribution, log } = game;
+  const mode = GAME_MODES[game.started ? game.gameMode : gameMode];
 
   const showNotif = useCallback((msg, dur = 3000) => {
     setNotif(msg);
@@ -349,7 +46,7 @@ export default function CatanApp() {
     notifTimer.current = setTimeout(() => setNotif(null), dur);
   }, []);
 
-  // ── SCORES ──
+  // ── SCORES (derivados del estado del juego) ──
   const scores = useMemo(() => players.map(p => {
     const grp = {};
     p.productions.forEach(pr => {
@@ -391,51 +88,67 @@ export default function CatanApp() {
   // ── CHECK WIN ──
   useEffect(() => {
     const w = finalScores.findIndex(s => s >= 10);
-    if (w >= 0 && !winner) setWinner(w);
+    if (w >= 0 && winner === null) setWinner(w);
   }, [finalScores, winner]);
 
   // ── SETUP HANDLERS ──
   const initPlayers = () => {
-    const names = [];
-    for (let i = 0; i < pCount; i++) names.push(`Jugador ${i + 1}`);
-    setPlayers(names.map((n, i) => ({
-      name: n, ci: i, productions: [], hand: eHand(),
-      devCards: [], knightsPlayed: 0, roadsBuilt: 0,
-      ports: [], devCardBought: [], devCardPlayed: false,
-    })));
+    const list = [];
+    for (let i = 0; i < pCount; i++) {
+      list.push({ name: `Jugador ${i + 1}`, ci: i, _colorOpen: false });
+    }
+    setSetupPlayers(list);
     const sd = {};
     for (let i = 0; i < pCount; i++) sd[i] = [{ hexes: [{ num: "", res: "" }] }, { hexes: [{ num: "", res: "" }] }];
     setSetupData(sd);
     setPhase("names");
   };
 
+  const moveSetupPlayer = (idx, dir) => {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= setupPlayers.length) return;
+    setSetupPlayers(prev => {
+      const next = [...prev];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+    setSetupData(prev => {
+      const np = { ...prev };
+      [np[idx], np[newIdx]] = [np[newIdx], np[idx]];
+      return np;
+    });
+  };
+
   const startGame = () => {
-    setPlayers(prev => prev.map((p, pi) => {
-      const prods = [];
-      (setupData[pi] || []).forEach((sett, si) => {
-        const gidVal = gid();
-        sett.hexes.forEach(h => {
-          if (h.num && h.res) prods.push({ id: gid(), num: parseInt(h.num), res: h.res, isCity: false, gid: gidVal });
-        });
-      });
-      return { ...p, productions: prods };
-    }));
-    setDeck(shuffle([...INIT_DECK]));
-    setCp(0);
-    addLog(`🎲 Empieza ${players[0]?.name || "Jugador 1"}. ¡A jugar!`);
+    dispatchAction({
+      type: "START_GAME",
+      mode: gameMode,
+      players: setupPlayers.map(p => ({ name: p.name, ci: p.ci })),
+      settlements: setupData,
+      deck: shuffle([...INIT_DECK]),
+    });
+    setWinner(null);
+    setTab("dados");
     setPhase("game");
+  };
+
+  const newGame = () => {
+    resetGame();
+    setWinner(null);
+    setSetupPlayers([]);
+    setSetupData({});
+    setModal(null);
+    setTab("dados");
+    setPhase("mode");
   };
 
   // ── GAME HANDLERS ──
   const processRoll = (d1, d2, manual = false) => {
-    setDice([d1, d2]);
     const sum = d1 + d2;
-    setDiceHistory(prev => [sum, ...prev].slice(0, 24));
-    addLog(manual
-      ? `✍️ ${players[cp].name} ingresó ${sum} manualmente`
-      : `🎲 ${players[cp].name} tiró ${d1} + ${d2} = ${sum}`);
+    dispatchAction({ type: "ROLL", d1, d2, manual });
 
     if (sum === 7) {
+      // Un 7 no modifica manos hasta el descarte, así que `players` (pre-acción) sirve.
       const needDiscard = players.map((p, i) => ({ idx: i, total: totalC(p.hand) })).filter(x => x.total > 7);
       if (needDiscard.length > 0) {
         setModalDiscards(eHand());
@@ -443,10 +156,16 @@ export default function CatanApp() {
       } else {
         setModal({ type: "robber" });
       }
-      setTurnPhase("rolled");
+    } else if (sum === robber) {
+      showNotif(`⛔ El ladrón bloquea el ${sum}. Nadie recibe recursos.`);
     } else {
-      distributeResources(sum);
-      setTurnPhase("rolled");
+      const gains = computeGains(players, sum, robber);
+      const receiving = gains.filter(g => totalC(g) > 0).length;
+      if (receiving > 0) {
+        showNotif(`📦 Recursos distribuidos (${receiving} jugador${receiving === 1 ? "" : "es"})`, 2500);
+      } else {
+        showNotif(`Nadie produce con el ${sum}`);
+      }
     }
   };
 
@@ -469,73 +188,12 @@ export default function CatanApp() {
     processRoll(d1, d2, true);
   };
 
-  const distributeResources = (num) => {
-    // Build distribution lines based on current productions
-    if (num === robber) {
-      const msg = `⛔ El ladrón bloquea el ${num}. Nadie recibe recursos.`;
-      showNotif(msg);
-      addLog(`⛔ Ladrón bloquea el ${num}`);
-      setLastDistribution({ num, lines: [] });
-      return;
-    }
-
-    const lines = [];
-    const gainsByPlayer = players.map(p => {
-      const gains = eHand();
-      p.productions.forEach(pr => {
-        if (pr.num === num && pr.num !== robber) {
-          const amt = pr.isCity ? 2 : 1;
-          gains[pr.res] = (gains[pr.res] || 0) + amt;
-        }
-      });
-      return gains;
-    });
-
-    // Apply gains to hands
-    setPlayers(prev => prev.map((p, i) => {
-      const gains = gainsByPlayer[i] || eHand();
-      const newHand = { ...p.hand };
-      Object.entries(gains).forEach(([r, v]) => { newHand[r] += v; });
-      return { ...p, hand: newHand };
-    }));
-
-    // Build UX lines + logs
-    gainsByPlayer.forEach((gains, i) => {
-      const items = Object.entries(gains)
-        .filter(([, v]) => v > 0)
-        .map(([r, v]) => `+${v} ${RM[r].e} ${RM[r].n}`)
-        .join(" ");
-      if (items) {
-        lines.push({ ci: players[i].ci, name: players[i].name, items });
-        addLog(`📦 ${players[i].name}: ${items}`);
-      }
-    });
-
-    setLastDistribution({ num, lines });
-
-    if (lines.length > 0) {
-      // Keep the notification short; detailed list is shown in the panel
-      showNotif(`📦 Recursos distribuidos (${lines.length} jugador${lines.length === 1 ? "" : "es"})`, 2500);
-    } else {
-      showNotif(`Nadie produce con el ${num}`);
-      addLog(`📦 Nadie produce con el ${num}`);
-    }
-  };
-
   const applyDiscard = (playerIdx, discards) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== playerIdx) return p;
-      const nh = { ...p.hand };
-      Object.entries(discards).forEach(([r, v]) => { nh[r] -= v; });
-      return { ...p, hand: nh };
-    }));
-    const items = Object.entries(discards).filter(([, v]) => v > 0).map(([r, v]) => `${v}${RM[r].e}`).join(" ");
-    addLog(`🗑️ ${players[playerIdx].name} descartó ${items}`);
+    dispatchAction({ type: "DISCARD", player: playerIdx, discards });
   };
 
   const placeRobber = (num) => {
-    setRobber(num);
-    addLog(`🦹 Ladrón colocado en el ${num}`);
+    dispatchAction({ type: "PLACE_ROBBER", num });
     // Check who to steal from
     const victims = [];
     players.forEach((p, i) => {
@@ -556,17 +214,12 @@ export default function CatanApp() {
     Object.entries(victim.hand).forEach(([r, v]) => { for (let i = 0; i < v; i++) cards.push(r); });
     if (cards.length === 0) { setModal(null); return; }
     const stolen = cards[Math.floor(Math.random() * cards.length)];
-    setPlayers(prev => prev.map((p, i) => {
-      if (i === victimIdx) { const nh = { ...p.hand }; nh[stolen]--; return { ...p, hand: nh }; }
-      if (i === cp) { const nh = { ...p.hand }; nh[stolen]++; return { ...p, hand: nh }; }
-      return p;
-    }));
-    addLog(`🦹 ${players[cp].name} robó 1${RM[stolen].e} a ${victim.name}`);
+    dispatchAction({ type: "STEAL", victim: victimIdx, res: stolen });
     showNotif(`Robaste ${RM[stolen].e} ${RM[stolen].n} a ${victim.name}`);
     setModal(null);
   };
 
-  // Freemium MVP: construir con confirmación + error claro
+  // Construir con confirmación + error claro
   const requestBuild = (type) => {
     if (mode.enforceCosts) {
       if (turnPhase !== "rolled") {
@@ -587,13 +240,7 @@ export default function CatanApp() {
     if (mode.enforceCosts && !afford(players[cp].hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
 
     if (type === "camino") {
-      setPlayers(prev => prev.map((p, i) => {
-        if (i !== cp) return p;
-        const nh = { ...p.hand };
-        if (mode.enforceCosts) Object.entries(cost).forEach(([r, v]) => { nh[r] -= v; });
-        return { ...p, hand: nh, roadsBuilt: p.roadsBuilt + 1 };
-      }));
-      addLog(`🛤️ ${players[cp].name} construyó un camino (total: ${players[cp].roadsBuilt + 1})`);
+      dispatchAction({ type: "BUILD_ROAD" });
       showNotif("Camino construido");
     } else if (type === "poblado") {
       setModalHexes([{ num: "", res: "" }]);
@@ -602,80 +249,31 @@ export default function CatanApp() {
       setModal({ type: "upgradeCity" });
     } else if (type === "desarrollo") {
       if (deck.length === 0) { showNotif("No quedan cartas de desarrollo"); return; }
-      setPlayers(prev => prev.map((p, i) => {
-        if (i !== cp) return p;
-        const nh = { ...p.hand };
-        if (mode.enforceCosts) Object.entries(cost).forEach(([r, v]) => { nh[r] -= v; });
-        const card = deck[0];
-        return { ...p, hand: nh, devCards: [...p.devCards, card], devCardBought: [...p.devCardBought, card] };
-      }));
       const card = deck[0];
-      setDeck(prev => prev.slice(1));
-      addLog(`🃏 ${players[cp].name} compró carta de desarrollo`);
+      dispatchAction({ type: "BUY_DEV" });
       showNotif(`Compraste: ${DC[card].e} ${DC[card].n}`);
     }
   };
 
   const addSettlement = (hexes) => {
-    const gidVal = gid();
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== cp) return p;
-      const nh = { ...p.hand };
-      if (mode.enforceCosts) Object.entries(COSTS.poblado).forEach(([r, v]) => { nh[r] -= v; });
-      const newProds = hexes.filter(h => h.num && h.res).map(h => ({
-        id: gid(), num: parseInt(h.num), res: h.res, isCity: false, gid: gidVal,
-      }));
-      return { ...p, hand: nh, productions: [...p.productions, ...newProds] };
-    }));
-    addLog(`🏠 ${players[cp].name} construyó un poblado`);
+    dispatchAction({ type: "ADD_SETTLEMENT", hexes });
     showNotif("Poblado construido");
     setModal(null);
   };
 
   const upgradeToCity = (gidVal) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== cp) return p;
-      const nh = { ...p.hand };
-      if (mode.enforceCosts) Object.entries(COSTS.ciudad).forEach(([r, v]) => { nh[r] -= v; });
-      return {
-        ...p, hand: nh,
-        productions: p.productions.map(pr => pr.gid === gidVal ? { ...pr, isCity: true } : pr),
-      };
-    }));
-    addLog(`🏙️ ${players[cp].name} mejoró a ciudad`);
+    dispatchAction({ type: "UPGRADE_CITY", gid: gidVal });
     showNotif("Ciudad construida");
     setModal(null);
   };
 
   const doTrade = (give, receive, ratio) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== cp) return p;
-      const nh = { ...p.hand };
-      nh[give] -= ratio;
-      nh[receive] += 1;
-      return { ...p, hand: nh };
-    }));
-    addLog(`🔄 ${players[cp].name} cambió ${ratio}${RM[give].e} por 1${RM[receive].e}`);
+    dispatchAction({ type: "TRADE_BANK", give, receive, ratio });
     showNotif(`Cambiaste ${ratio} ${RM[give].n} por 1 ${RM[receive].n}`);
   };
 
   const doPlayerTrade = (otherIdx, give, receive) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i === cp) {
-        const nh = { ...p.hand };
-        Object.entries(give).forEach(([r, v]) => { nh[r] -= v; });
-        Object.entries(receive).forEach(([r, v]) => { nh[r] += v; });
-        return { ...p, hand: nh };
-      }
-      if (i === otherIdx) {
-        const nh = { ...p.hand };
-        Object.entries(give).forEach(([r, v]) => { nh[r] += v; });
-        Object.entries(receive).forEach(([r, v]) => { nh[r] -= v; });
-        return { ...p, hand: nh };
-      }
-      return p;
-    }));
-    addLog(`🤝 ${players[cp].name} comerció con ${players[otherIdx].name}`);
+    dispatchAction({ type: "TRADE_PLAYER", other: otherIdx, give, receive });
     showNotif("Comercio realizado");
   };
 
@@ -689,63 +287,29 @@ export default function CatanApp() {
       return;
     }
 
+    dispatchAction({ type: "PLAY_DEV", card: cardType, cardIdx });
     if (cardType === "caballero") {
-      setPlayers(prev => prev.map((p, i) => {
-        if (i !== cp) return p;
-        const dc = [...p.devCards]; dc.splice(cardIdx, 1);
-        return { ...p, devCards: dc, knightsPlayed: p.knightsPlayed + 1, devCardPlayed: true };
-      }));
-      addLog(`⚔️ ${players[cp].name} jugó Caballero (total: ${players[cp].knightsPlayed + 1})`);
       setModal({ type: "robber" });
     } else if (cardType === "monopolio") {
-      setPlayers(prev => prev.map((p, i) => {
-        if (i !== cp) return p;
-        const dc = [...p.devCards]; dc.splice(cardIdx, 1);
-        return { ...p, devCards: dc, devCardPlayed: true };
-      }));
       setModal({ type: "monopoly" });
     } else if (cardType === "abundancia") {
-      setPlayers(prev => prev.map((p, i) => {
-        if (i !== cp) return p;
-        const dc = [...p.devCards]; dc.splice(cardIdx, 1);
-        return { ...p, devCards: dc, devCardPlayed: true };
-      }));
       setModal({ type: "yearOfPlenty", picks: 0 });
     } else if (cardType === "caminos") {
-      setPlayers(prev => prev.map((p, i) => {
-        if (i !== cp) return p;
-        const dc = [...p.devCards]; dc.splice(cardIdx, 1);
-        return { ...p, devCards: dc, roadsBuilt: p.roadsBuilt + 2, devCardPlayed: true };
-      }));
-      addLog(`🛤️ ${players[cp].name} jugó Construcción (+2 caminos, total: ${players[cp].roadsBuilt + 2})`);
       showNotif("Construcción: +2 caminos");
     }
   };
 
   const applyMonopoly = (res) => {
-    let stolen = 0;
-    setPlayers(prev => {
-      const updated = prev.map(p => ({ ...p }));
-      prev.forEach((p, i) => {
-        if (i === cp) return;
-        stolen += p.hand[res];
-        updated[i] = { ...updated[i], hand: { ...p.hand, [res]: 0 } };
-      });
-      updated[cp] = { ...updated[cp], hand: { ...updated[cp].hand, [res]: updated[cp].hand[res] + stolen } };
-      return updated;
-    });
-    addLog(`👑 ${players[cp].name} jugó Monopolio (${RM[res].n}): robó ${stolen}`);
+    const stolen = players.reduce((acc, p, i) => i === cp ? acc : acc + p.hand[res], 0);
+    dispatchAction({ type: "MONOPOLY", res });
     showNotif(`Monopolio: robaste ${stolen} ${RM[res].n}`);
     setModal(null);
   };
 
   const applyYearOfPlenty = (res) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== cp) return p;
-      return { ...p, hand: { ...p.hand, [res]: p.hand[res] + 1 } };
-    }));
-    if (modal.picks >= 1) {
-      addLog(`🎁 ${players[cp].name} jugó Abundancia`);
+    const last = (modal?.picks || 0) >= 1;
+    dispatchAction({ type: "YEAR_OF_PLENTY", res, last });
+    if (last) {
       showNotif("Abundancia: tomaste 2 recursos");
       setModal(null);
     } else {
@@ -754,31 +318,13 @@ export default function CatanApp() {
   };
 
   const movePlayer = (idx, dir) => {
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= players.length) return;
-    setPlayers(prev => {
-      const next = [...prev];
-      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-      return next;
-    });
-    // Keep cp pointing at the same physical player after a swap.
-    setCp(prev => {
-      if (prev === idx) return newIdx;
-      if (prev === newIdx) return idx;
-      return prev;
-    });
+    dispatchAction({ type: "MOVE_PLAYER", idx, dir });
   };
 
   const endTurn = () => {
-    setPlayers(prev => prev.map((p, i) => i === cp ? { ...p, devCardBought: [], devCardPlayed: false } : p));
-    const next = (cp + 1) % players.length;
-    setCp(next);
-    setTurnPhase("preroll");
-    setDice([0, 0]);
+    dispatchAction({ type: "END_TURN" });
     setManualPickerOpen(false);
-    if (next === 0) setTurn(t => t + 1);
     setTab("dados");
-    addLog(`➡️ Turno de ${players[next].name}`);
   };
 
   const getTradeRatio = (res) => {
@@ -789,19 +335,12 @@ export default function CatanApp() {
   };
 
   const addPort = (port) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== cp) return p;
-      if (p.ports.includes(port)) return p;
-      return { ...p, ports: [...p.ports, port] };
-    }));
+    dispatchAction({ type: "ADD_PORT", port });
     showNotif(`Puerto ${port === "3:1" ? "3:1" : RM[port]?.n} agregado`);
   };
 
   const removePort = (port) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== cp) return p;
-      return { ...p, ports: p.ports.filter(pt => pt !== port) };
-    }));
+    dispatchAction({ type: "REMOVE_PORT", port });
   };
 
   const addFreeSettlement = (playerIdx) => {
@@ -810,31 +349,15 @@ export default function CatanApp() {
   };
 
   const addFreeProductions = (playerIdx, hexes) => {
-    const gidVal = gid();
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== playerIdx) return p;
-      const newProds = hexes.filter(h => h.num && h.res).map(h => ({
-        id: gid(), num: parseInt(h.num), res: h.res, isCity: false, gid: gidVal,
-      }));
-      return { ...p, productions: [...p.productions, ...newProds] };
-    }));
-    addLog(`🏠 Se agregó un poblado a ${players[playerIdx].name}`);
+    dispatchAction({ type: "ADD_FREE_SETTLEMENT", player: playerIdx, hexes });
     showNotif("Poblado agregado");
     setModal(null);
   };
 
   const manualAdjust = (playerIdx, res, delta) => {
-    setPlayers(prev => prev.map((p, i) => {
-      if (i !== playerIdx) return p;
-      const nh = { ...p.hand };
-      nh[res] = Math.max(0, nh[res] + delta);
-      return { ...p, hand: nh };
-    }));
+    dispatchAction({ type: "MANUAL_ADJUST", player: playerIdx, res, delta });
   };
 
-  // ═══════════════════════════════════════════════
-  //  RENDER: SETUP - PLAYER COUNT
-  // ═══════════════════════════════════════════════
   // ═══════════════════════════════════════════════
   //  RENDER: SETUP - MODE
   // ═══════════════════════════════════════════════
@@ -882,6 +405,9 @@ export default function CatanApp() {
     </div>
   );
 
+  // ═══════════════════════════════════════════════
+  //  RENDER: SETUP - PLAYER COUNT
+  // ═══════════════════════════════════════════════
   if (phase === "count") return (
     <div className="catan-app">
       <style>{STYLE_CSS}</style>
@@ -923,9 +449,9 @@ export default function CatanApp() {
         <h2 className="text-2xl font-bold text-amber-400 mb-2 text-center">Nombres y colores</h2>
         <p className="text-slate-400 text-xs text-center mb-5">El orden de la lista es el orden de turnos. Usá las flechas para reordenar.</p>
         <div className="space-y-3 mb-8">
-          {players.map((p, i) => {
-            const usedColors = players.map((pl, j) => j !== i ? pl.ci : -1).filter(c => c >= 0);
-            const [open, setOpen] = [p._colorOpen || false, (v) => setPlayers(prev => prev.map((pl, j) => j === i ? { ...pl, _colorOpen: v } : pl))];
+          {setupPlayers.map((p, i) => {
+            const usedColors = setupPlayers.map((pl, j) => j !== i ? pl.ci : -1).filter(c => c >= 0);
+            const [open, setOpen] = [p._colorOpen || false, (v) => setSetupPlayers(prev => prev.map((pl, j) => j === i ? { ...pl, _colorOpen: v } : pl))];
             return (
               <div key={i} className="flex items-center gap-3">
                 <div style={{position:"relative",flexShrink:0}}>
@@ -942,7 +468,7 @@ export default function CatanApp() {
                           <button
                             key={ci}
                             disabled={used}
-                            onClick={() => { setPlayers(prev => prev.map((pl, j) => j === i ? { ...pl, ci, _colorOpen: false } : pl)); }}
+                            onClick={() => { setSetupPlayers(prev => prev.map((pl, j) => j === i ? { ...pl, ci, _colorOpen: false } : pl)); }}
                             style={{width:32,height:32,borderRadius:"50%",backgroundColor:c.h,border: ci === p.ci ? "2px solid #f0d48a" : "2px solid transparent",cursor: used ? "not-allowed" : "pointer",opacity: used ? 0.25 : 1,transition:"all .15s"}}
                             title={c.n + (ci >= 4 ? " (exp)" : "")}
                           />
@@ -956,22 +482,22 @@ export default function CatanApp() {
                   value={p.name}
                   onChange={e => {
                     const v = e.target.value;
-                    setPlayers(prev => prev.map((pl, j) => j === i ? { ...pl, name: v } : pl));
+                    setSetupPlayers(prev => prev.map((pl, j) => j === i ? { ...pl, name: v } : pl));
                   }}
                   placeholder={`Jugador ${i + 1}`}
                 />
                 <div className="flex flex-col gap-1">
                   <button
-                    onClick={() => movePlayer(i, -1)}
+                    onClick={() => moveSetupPlayer(i, -1)}
                     disabled={i === 0}
                     className={`w-7 h-7 rounded-md flex items-center justify-center text-sm font-bold transition-all ${i === 0 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
                     title="Subir">
                     ▲
                   </button>
                   <button
-                    onClick={() => movePlayer(i, 1)}
-                    disabled={i === players.length - 1}
-                    className={`w-7 h-7 rounded-md flex items-center justify-center text-sm font-bold transition-all ${i === players.length - 1 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
+                    onClick={() => moveSetupPlayer(i, 1)}
+                    disabled={i === setupPlayers.length - 1}
+                    className={`w-7 h-7 rounded-md flex items-center justify-center text-sm font-bold transition-all ${i === setupPlayers.length - 1 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
                     title="Bajar">
                     ▼
                   </button>
@@ -1025,11 +551,11 @@ export default function CatanApp() {
         <div className="max-w-lg mx-auto" style={{position:"relative",zIndex:1}}>
           <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
             <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor:COLORS[players[setupIdx]?.ci ?? setupIdx].h}}>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor:COLORS[setupPlayers[setupIdx]?.ci ?? setupIdx].h}}>
                 {setupIdx + 1}
               </div>
               <div>
-                <h2 className="text-xl font-bold text-amber-400">{players[setupIdx]?.name}</h2>
+                <h2 className="text-xl font-bold text-amber-400">{setupPlayers[setupIdx]?.name}</h2>
                 <p className="text-slate-400 text-sm">Configurá los hexágonos de tus 2 poblados iniciales</p>
               </div>
             </div>
@@ -1070,7 +596,7 @@ export default function CatanApp() {
                   ← Anterior
                 </button>
               )}
-              {setupIdx < players.length - 1 ? (
+              {setupIdx < setupPlayers.length - 1 ? (
                 <button onClick={() => setSetupIdx(i => i + 1)}
                   className="flex-1 py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl transition-all">
                   Siguiente →
@@ -1084,8 +610,8 @@ export default function CatanApp() {
             </div>
 
             <div className="flex gap-2 justify-center mt-4">
-              {players.map((_, i) => (
-                <div key={i} className={`w-3 h-3 rounded-full transition-all ${i === setupIdx ? "scale-125" : ""}`} style={{backgroundColor: i === setupIdx ? COLORS[players[i]?.ci ?? i].h : "#475569"}} />
+              {setupPlayers.map((_, i) => (
+                <div key={i} className={`w-3 h-3 rounded-full transition-all ${i === setupIdx ? "scale-125" : ""}`} style={{backgroundColor: i === setupIdx ? COLORS[setupPlayers[i]?.ci ?? i].h : "#475569"}} />
               ))}
             </div>
           </div>
@@ -1097,7 +623,7 @@ export default function CatanApp() {
   // ═══════════════════════════════════════════════
   //  RENDER: GAME
   // ═══════════════════════════════════════════════
-  if (phase !== "game") return null;
+  if (phase !== "game" || !game.started) return null;
   const cur = players[cp];
   const diceSum = dice[0] + dice[1];
 
@@ -1132,7 +658,7 @@ export default function CatanApp() {
             <div className="text-6xl mb-4">🏆</div>
             <h2 className="text-3xl font-bold text-amber-400 mb-2">¡{players[winner].name} gana!</h2>
             <p className="text-slate-300 text-lg mb-6">{finalScores[winner]} puntos de victoria</p>
-            <button onClick={() => { setPhase("mode"); setWinner(null); setPlayers([]); setLog([]); setTurn(1); }}
+            <button onClick={newGame}
               className="px-6 py-3 bg-amber-500 text-white font-bold rounded-xl">Nueva partida</button>
           </div>
         </div>
@@ -1153,8 +679,8 @@ export default function CatanApp() {
             <div>
               <span className="text-white font-bold">{cur.name}</span>
               <span className="text-slate-400 text-sm ml-2">Turno {turn}</span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider ${gameMode === "simple" ? "bg-slate-700 text-slate-300" : "bg-amber-900/60 text-amber-300"}`}>
-                {gameMode === "simple" ? "Simple" : "Completo"}
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider ${game.gameMode === "simple" ? "bg-slate-700 text-slate-300" : "bg-amber-900/60 text-amber-300"}`}>
+                {game.gameMode === "simple" ? "Simple" : "Completo"}
               </span>
             </div>
           </div>
@@ -1294,7 +820,7 @@ export default function CatanApp() {
 
               </div>
 
-              {/* Freemium: historial de números (tipo ruleta) */}
+              {/* Historial de números (tipo ruleta) */}
               <div className="bg-slate-800 rounded-2xl p-4">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-slate-300 font-semibold">Historial de tiradas</h3>
@@ -1594,7 +1120,7 @@ export default function CatanApp() {
         <div className="fixed inset-0 bg-black/70 z-40 flex items-end sm:items-center justify-center p-4">
           <div className="bg-slate-800 rounded-t-3xl sm:rounded-3xl p-6 w-full max-w-md max-h-[85vh] overflow-y-auto border border-slate-600">
 
-            {/* Confirm build (Freemium MVP) */}
+            {/* Confirm build */}
             {modal.type === "confirmBuild" && (() => {
               const type = modal.buildType;
               const cost = COSTS[type];
