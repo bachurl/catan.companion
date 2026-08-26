@@ -53,9 +53,10 @@ export default function CatanApp() {
   const [setupIdx, setSetupIdx] = useState(0);
   const [setupData, setSetupData] = useState({});
   const [notif, setNotif] = useState(null);
-  const [tab, setTab] = useState("dados");
+  const [tab, setTab] = useState("turno");
   const [rolling, setRolling] = useState(false);
   const [manualPickerOpen, setManualPickerOpen] = useState(false);
+  const [turnBanner, setTurnBanner] = useState(null); // {name, ci} al cambiar de turno
   const [modal, setModal] = useState(null);
   const [winner, setWinner] = useState(null);
   // Modal-level state (lifted to avoid hooks-in-IIFE)
@@ -111,7 +112,7 @@ export default function CatanApp() {
     if (!savedGame) return;
     replaceActions(savedGame.actions);
     setWinner(null);
-    setTab("dados");
+    setTab("turno");
     setPhase("game");
     // Si la partida guardada era online, intenta reconectar a la sala:
     // el servidor pisa el log local con el orden canónico + realtime.
@@ -169,7 +170,7 @@ export default function CatanApp() {
     });
     setSavedGame(null);
     setWinner(null);
-    setTab("dados");
+    setTab("turno");
     setPhase("game");
   };
 
@@ -180,7 +181,7 @@ export default function CatanApp() {
     setSetupPlayers([]);
     setSetupData({});
     setModal(null);
-    setTab("dados");
+    setTab("turno");
     setPhase("mode");
   };
 
@@ -197,7 +198,7 @@ export default function CatanApp() {
         setModalDiscards(eHand());
         setModal({ type: "discard", queue: needDiscard.map(x => x.idx), current: 0 });
       } else {
-        setModal({ type: "robber" });
+        setModal({ type: "robber", from7: true });
       }
     } else if (sum === robber) {
       showNotif(`⛔ El ladrón bloquea el ${sum}. Nadie recibe recursos.`);
@@ -244,7 +245,7 @@ export default function CatanApp() {
       if (p.productions.some(pr => pr.num === num) && totalC(p.hand) > 0) victims.push(i);
     });
     if (victims.length > 0) {
-      setModal({ type: "steal", victims });
+      setModal({ type: "steal", victims, from7: modal?.from7 });
     } else {
       setModal(null);
       showNotif(`Ladrón en el ${num}. No hay a quién robar.`);
@@ -371,9 +372,11 @@ export default function CatanApp() {
   };
 
   const endTurn = () => {
+    const next = (cp + 1) % players.length;
+    setTurnBanner({ name: players[next].name, ci: players[next].ci });
     dispatch({ type: "END_TURN" });
     setManualPickerOpen(false);
-    setTab("dados");
+    setTab("turno");
   };
 
   const getTradeRatio = (res) => {
@@ -426,7 +429,7 @@ export default function CatanApp() {
       replaceActions(remoteActions);
       setSavedGame(null);
       setWinner(null);
-      setTab("dados");
+      setTab("turno");
       setPhase("game");
       showNotif("🌐 Conectado a la sala");
     } catch (e) {
@@ -768,13 +771,11 @@ export default function CatanApp() {
   const diceSum = dice[0] + dice[1];
 
   const TABS = [
-    { id: "dados", label: "Dados", e: "🎲" },
-    { id: "construir", label: "Construir", e: "🏗️" },
-    { id: "comerciar", label: "Comerciar", e: "🔄" },
-    { id: "cartas", label: "Cartas", e: "🃏", hideInSimple: true },
+    { id: "turno", label: "Turno", e: "🎲" },
     { id: "jugadores", label: "Jugadores", e: "👥" },
+    { id: "historial", label: "Historial", e: "📊" },
     { id: "log", label: "Log", e: "📋" },
-  ].filter(t => mode.showDevCards || !t.hideInSimple);
+  ];
 
   // Group settlements for display
   const getSettlementGroups = (p) => {
@@ -800,6 +801,22 @@ export default function CatanApp() {
             <p className="text-slate-300 text-lg mb-6">{finalScores[winner]} puntos de victoria</p>
             <button onClick={newGame}
               className="px-6 py-3 bg-amber-500 text-white font-bold rounded-xl">Nueva partida</button>
+          </div>
+        </div>
+      )}
+
+      {/* Cambio de turno */}
+      {turnBanner && winner === null && (
+        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4"
+          onClick={() => setTurnBanner(null)}>
+          <div className="text-center" style={{cursor:"pointer"}}>
+            <div className="w-20 h-20 rounded-full mx-auto mb-5 border-4 border-white/20" style={{backgroundColor:COLORS[turnBanner.ci].h}} />
+            <p className="text-slate-400 text-sm mb-1 uppercase tracking-widest">Le toca a</p>
+            <h2 style={{fontFamily:"'Cinzel',serif",fontSize:38,fontWeight:900,color:"#f0d48a",margin:"0 0 18px"}}>{turnBanner.name}</h2>
+            <button onClick={() => setTurnBanner(null)}
+              className="px-8 py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg">
+              🎲 Empezar turno
+            </button>
           </div>
         </div>
       )}
@@ -843,12 +860,6 @@ export default function CatanApp() {
                 ↩️
               </button>
             )}
-            {turnPhase === "rolled" && (
-              <button onClick={endTurn}
-                className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-lg text-sm transition-all">
-                Terminar turno →
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -885,132 +896,128 @@ export default function CatanApp() {
       <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-2xl mx-auto">
 
-          {/* ── DADOS ── */}
-          {tab === "dados" && (
+          {/* ── TURNO (flujo guiado) ── */}
+          {tab === "turno" && (
             <div className="space-y-6">
               <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:16,width:"100%"}}>
-                <div className="flex gap-4">
-                  {dice[0] > 0 ? (
-                    <>
-                      <DiceFace value={dice[0]} rolling={rolling} />
-                      <DiceFace value={dice[1]} rolling={rolling} />
-                    </>
-                  ) : (
-                    <div className="flex gap-4">
-                      <div className="w-16 h-16 bg-white rounded-xl shadow-lg flex items-center justify-center">
-                        <span style={{fontSize:28,fontWeight:900,color:"#1e293b",fontFamily:"'Cinzel',serif"}}>?</span>
-                      </div>
-                      <div className="w-16 h-16 bg-white rounded-xl shadow-lg flex items-center justify-center">
-                        <span style={{fontSize:28,fontWeight:900,color:"#1e293b",fontFamily:"'Cinzel',serif"}}>?</span>
-                      </div>
-                    </div>
-                  )}
+
+                {/* Quién juega */}
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:2}}>
+                  <div className="w-5 h-5 rounded-full" style={{backgroundColor:COLORS[cur.ci].h}} />
+                  <span style={{fontFamily:"'Cinzel',serif",fontSize:20,fontWeight:800,color:"#f0e6d3"}}>Turno de {cur.name}</span>
                 </div>
-                {diceSum > 0 && <div style={{fontSize:48,fontWeight:900,color:"#f0d48a",textShadow:"0 2px 18px rgba(212,168,83,.4)",fontFamily:"'Cinzel',serif",textAlign:"center"}}>{diceSum}</div>}
-                {turnPhase === "preroll" && !mode.manualDiceOnly && !manualPickerOpen && (
-                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
-                    <button onClick={doRollDice}
-                      style={{background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.15rem",padding:"16px 48px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 14px 34px rgba(212,168,83,.35)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"0 auto"}}>
-                      🎲 Tirar dados
-                    </button>
-                    <button onClick={() => setManualPickerOpen(true)}
-                      style={{background:"transparent",color:"#d4a853",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:"0.92rem",padding:"6px 14px",borderRadius:10,border:"1px solid rgba(212,168,83,.35)",cursor:"pointer",textAlign:"center"}}>
-                      ✍️ Anotar tirada de la mesa
-                    </button>
-                  </div>
-                )}
-                {turnPhase === "preroll" && (mode.manualDiceOnly || manualPickerOpen) && (
-                  <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)"}}>
-                    <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:12,textAlign:"center",letterSpacing:1}}>¿Qué número salió en los dados?</div>
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(6, 1fr)",gap:8,marginBottom:12}}>
-                      {Array.from({ length: 11 }, (_, k) => k + 2).map(n => (
-                        <button key={n} onClick={() => doManualRoll(n)}
-                          style={{padding:"12px 0",borderRadius:10,background:n===7?"linear-gradient(135deg,#b94a3c,#8a3528)":"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Cinzel',serif",fontWeight:800,fontSize:"1.1rem",border:"1px solid rgba(240,212,138,.4)",cursor:"pointer",boxShadow:"0 4px 12px rgba(0,0,0,.25)"}}>
-                          {n}
-                        </button>
-                      ))}
-                    </div>
-                    {!mode.manualDiceOnly && (
-                      <button onClick={() => setManualPickerOpen(false)}
-                        style={{width:"100%",padding:"10px 14px",borderRadius:10,background:"rgba(100,116,139,.35)",border:"1px solid rgba(148,163,184,.4)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}}>
-                        Cancelar
+
+                {turnPhase === "preroll" && (
+                  <>
+                    {/* El turno arranca con los dados: no hay otra acción visible */}
+                    {!mode.manualDiceOnly && !manualPickerOpen && (
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
+                        <div className="flex gap-4">
+                          <div className="w-16 h-16 bg-white rounded-xl shadow-lg flex items-center justify-center">
+                            <span style={{fontSize:28,fontWeight:900,color:"#1e293b",fontFamily:"'Cinzel',serif"}}>?</span>
+                          </div>
+                          <div className="w-16 h-16 bg-white rounded-xl shadow-lg flex items-center justify-center">
+                            <span style={{fontSize:28,fontWeight:900,color:"#1e293b",fontFamily:"'Cinzel',serif"}}>?</span>
+                          </div>
+                        </div>
+                        {rolling ? (
+                          <p style={{color:"#f0e6d3",fontWeight:700,fontSize:15,margin:0}}>Tirando...</p>
+                        ) : (
+                          <>
+                            <button onClick={doRollDice}
+                              style={{background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.15rem",padding:"16px 48px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 14px 34px rgba(212,168,83,.35)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"0 auto"}}>
+                              🎲 Tirar dados
+                            </button>
+                            <button onClick={() => setManualPickerOpen(true)}
+                              style={{background:"transparent",color:"#d4a853",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:"0.92rem",padding:"6px 14px",borderRadius:10,border:"1px solid rgba(212,168,83,.35)",cursor:"pointer",textAlign:"center"}}>
+                              ✍️ Anotar tirada de la mesa
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {(mode.manualDiceOnly || manualPickerOpen) && (
+                      <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)"}}>
+                        <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:17,fontWeight:700,marginBottom:12,textAlign:"center",letterSpacing:.5}}>¿Qué número salió en los dados?</div>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(4, 1fr)",gap:10,marginBottom:12}}>
+                          {Array.from({ length: 11 }, (_, k) => k + 2).map(n => (
+                            <button key={n} onClick={() => doManualRoll(n)}
+                              style={{padding:"16px 0",borderRadius:12,background:n===7?"linear-gradient(135deg,#b94a3c,#8a3528)":"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Cinzel',serif",fontWeight:800,fontSize:"1.35rem",border:"1px solid rgba(240,212,138,.4)",cursor:"pointer",boxShadow:"0 4px 12px rgba(0,0,0,.25)"}}>
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                        {!mode.manualDiceOnly && (
+                          <button onClick={() => setManualPickerOpen(false)}
+                            style={{width:"100%",padding:"10px 14px",borderRadius:10,background:"rgba(100,116,139,.35)",border:"1px solid rgba(148,163,184,.4)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}}>
+                            Cancelar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {/* Regla oficial: el Caballero se puede jugar antes de tirar */}
+                    {mode.showDevCards && cur.devCards.includes("caballero") && !cur.devCardPlayed && !cur.devCardBought.includes("caballero") && (
+                      <button onClick={() => playDevCard("caballero", cur.devCards.indexOf("caballero"))}
+                        style={{background:"transparent",color:"#a78bda",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:"0.88rem",padding:"6px 14px",borderRadius:10,border:"1px dashed rgba(167,139,218,.45)",cursor:"pointer"}}>
+                        ⚔️ Jugar Caballero antes de tirar
                       </button>
                     )}
-                  </div>
-                )}
-                {turnPhase === "rolled" && diceSum > 0 && diceSum !== 7 && (
-                  <p style={{color:"#f0e6d3",fontWeight:700,fontSize:15,letterSpacing:".2px",textAlign:"center",margin:0}}>{(lastDistribution?.num === diceSum && lastDistribution?.lines?.length > 0) ? "Recursos distribuidos. Podés construir, comerciar o terminar turno." : "Ningún jugador recibe recursos."}</p>
-                )}
-                {turnPhase === "rolled" && diceSum > 0 && diceSum !== 7 && lastDistribution?.num === diceSum && (
-                  <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)",textAlign:"center"}}>
-                    <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:10,textAlign:"center",letterSpacing:1}}>📦 Distribución</div>
-                    {lastDistribution.lines.length > 0 ? (
-                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {lastDistribution.lines.map((l, idx) => (
-                          <div key={idx} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:10,background:"rgba(46,204,113,.12)",border:"1px solid rgba(46,204,113,.18)",borderLeft:"3px solid #2ecc71",color:"#f0e6d3",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:600,fontSize:14}}>
-                            {playerMark(l.ci)} <span style={{fontWeight:800}}>{l.name}</span> <span style={{color:"#a89278",margin:"0 4px"}}>→</span> <span style={{fontWeight:800,color:"#2ecc71"}}>{l.items}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{color:"#a89278",fontSize:14,fontWeight:600,textAlign:"center"}}>Nadie recibe recursos</div>
-                    )}
-                  </div>
+                  </>
                 )}
 
-                {turnPhase === "rolled" && diceSum > 0 && (
-                  <div style={{width:"100%",maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"row",gap:12}}>
-                    <button
-                      style={{flex:1,padding:"14px 16px",borderRadius:12,background:"rgba(100,116,139,.35)",border:"2px solid rgba(148,163,184,.5)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:16,cursor:"pointer",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
-                      onClick={() => setTab("construir")}
-                    >
-                      🧱 Construir
-                    </button>
-                    <button
-                      style={{flex:1,padding:"14px 16px",borderRadius:12,background:"rgba(100,116,139,.35)",border:"2px solid rgba(148,163,184,.5)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:16,cursor:"pointer",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
-                      onClick={() => setTab("comerciar")}
-                    >
-                      🤝 Comerciar
-                    </button>
-                  </div>
-                )}
-
-              </div>
-
-              {/* Historial de números (tipo ruleta) */}
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-slate-300 font-semibold">Historial de tiradas</h3>
-                  <span className="text-slate-500 text-xs">últimas {Math.min(12, diceHistory.length)}/12</span>
-                </div>
-                {diceHistory.length === 0 ? (
-                  <p className="text-slate-500 text-sm">Todavía no hay tiradas en esta partida.</p>
-                ) : (
+                {turnPhase === "rolled" && (
                   <>
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {diceHistory.slice(0, 12).map((n, i) => (
-                        <span key={i} className={`px-3 py-1 rounded-full text-sm font-bold ${i === 0 ? "bg-amber-500 text-white" : "bg-slate-700 text-slate-200"}`}>
-                          {n}
-                        </span>
-                      ))}
+                    <div className="flex gap-4">
+                      {dice[0] > 0 && (
+                        <>
+                          <DiceFace value={dice[0]} rolling={rolling} />
+                          <DiceFace value={dice[1]} rolling={rolling} />
+                        </>
+                      )}
                     </div>
+                    {diceSum > 0 && <div style={{fontSize:48,fontWeight:900,color:"#f0d48a",textShadow:"0 2px 18px rgba(212,168,83,.4)",fontFamily:"'Cinzel',serif",textAlign:"center",lineHeight:1}}>{diceSum}</div>}
 
-                    <div className="grid grid-cols-11 gap-1 items-end">
-                      {Array.from({ length: 11 }, (_, k) => k + 2).map(n => {
-                        const v = diceCounts[n] || 0;
-                        return (
-                          <div key={n} className="flex flex-col items-center gap-1">
-                            <div
-                              className="w-full bg-slate-700 rounded-md"
-                              style={{ height: `${Math.min(44, 6 + v * 6)}px` }}
-                              title={`${n}: ${v}`}
-                            />
-                            <span className="text-[10px] text-slate-400">{n}</span>
+                    {diceSum > 0 && diceSum !== 7 && lastDistribution?.num === diceSum && (
+                      <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)",textAlign:"center"}}>
+                        <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:10,textAlign:"center",letterSpacing:1}}>📦 Distribución</div>
+                        {lastDistribution.lines.length > 0 ? (
+                          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                            {lastDistribution.lines.map((l, idx) => (
+                              <div key={idx} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:10,background:"rgba(46,204,113,.12)",border:"1px solid rgba(46,204,113,.18)",borderLeft:"3px solid #2ecc71",color:"#f0e6d3",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:600,fontSize:14}}>
+                                {playerMark(l.ci)} <span style={{fontWeight:800}}>{l.name}</span> <span style={{color:"#a89278",margin:"0 4px"}}>→</span> <span style={{fontWeight:800,color:"#2ecc71"}}>{l.items}</span>
+                              </div>
+                            ))}
                           </div>
-                        );
-                      })}
+                        ) : (
+                          <div style={{color:"#a89278",fontSize:14,fontWeight:600,textAlign:"center"}}>Nadie recibe recursos con el {diceSum}</div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Acciones del turno: aparecen recién después de los dados */}
+                    <div style={{width:"100%",maxWidth:480,margin:"0 auto",display:"grid",gridTemplateColumns: mode.showDevCards ? "1fr 1fr 1fr" : "1fr 1fr",gap:10}}>
+                      <button
+                        style={{padding:"16px 8px",borderRadius:12,background:"rgba(100,116,139,.35)",border:"2px solid rgba(148,163,184,.5)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:15,cursor:"pointer",textAlign:"center"}}
+                        onClick={() => setModal({ type: "build" })}>
+                        🧱 Construir
+                      </button>
+                      <button
+                        style={{padding:"16px 8px",borderRadius:12,background:"rgba(100,116,139,.35)",border:"2px solid rgba(148,163,184,.5)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:15,cursor:"pointer",textAlign:"center"}}
+                        onClick={() => setModal({ type: "trade" })}>
+                        🤝 Comerciar
+                      </button>
+                      {mode.showDevCards && (
+                        <button
+                          style={{padding:"16px 8px",borderRadius:12,background:"rgba(100,116,139,.35)",border:"2px solid rgba(148,163,184,.5)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:15,cursor:"pointer",textAlign:"center"}}
+                          onClick={() => setModal({ type: "cards" })}>
+                          🃏 Cartas
+                        </button>
+                      )}
                     </div>
-                    <p className="text-slate-500 text-xs mt-3">Tip: 6 y 8 son los números más probables. Este gráfico es el historial real de la partida.</p>
+                    <button onClick={endTurn}
+                      style={{width:"100%",maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.1rem",padding:"16px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 10px 26px rgba(212,168,83,.3)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)"}}>
+                      Terminar turno →
+                    </button>
                   </>
                 )}
               </div>
@@ -1040,154 +1047,42 @@ export default function CatanApp() {
             </div>
           )}
 
-          {/* ── CONSTRUIR ── */}
-          {tab === "construir" && (
-            <div className="space-y-4">
-              <h3 className="text-slate-300 font-semibold">Construcciones</h3>
-              {Object.entries(COSTS)
-                .filter(([type]) => mode.showDevCards || type !== "desarrollo")
-                .map(([type, cost]) => {
-                const canBuild = mode.enforceCosts ? (afford(cur.hand, cost) && turnPhase === "rolled") : true;
-                return (
-                  <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
-                    <div>
-                      <div className="text-white font-bold">{COST_EMOJI[type]} {COST_NAMES[type]}</div>
-                      {mode.enforceCosts && (
-                        <div className="flex gap-1 mt-1">
-                          {Object.entries(cost).map(([r, v]) => (
-                            <ResBadge key={r} id={r} count={v} small />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <button onClick={() => requestBuild(type)} disabled={!canBuild}
-                      className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${canBuild ? "bg-green-500 hover:bg-green-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
-                      Construir
-                    </button>
-                  </div>
-                );
-              })}
-
-              <div className="bg-slate-800/50 rounded-2xl p-4 mt-6">
-                <h3 className="text-slate-300 font-semibold mb-3">Tus propiedades</h3>
-                {getSettlementGroups(cur).length === 0 ? (
-                  <p className="text-slate-500 text-sm">Sin propiedades registradas</p>
-                ) : (
-                  <div className="space-y-2">
-                    {getSettlementGroups(cur).map((g, i) => (
-                      <div key={g.gid} className="flex items-center gap-2 flex-wrap">
-                        <span className="text-white text-sm">{g.isCity ? "🏙️" : "🏠"}</span>
-                        {g.hexes.map(h => (
-                          <span key={h.id} className={`${RM[h.res].bg} ${RM[h.res].tx} px-2 py-0.5 rounded text-xs font-medium`}>
-                            {h.num} {RM[h.res].e}
-                          </span>
-                        ))}
-                      </div>
+          {/* ── HISTORIAL ── */}
+          {tab === "historial" && (
+            <div className="bg-slate-800 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-slate-300 font-semibold">Historial de tiradas</h3>
+                <span className="text-slate-500 text-xs">últimas {Math.min(12, diceHistory.length)}/12</span>
+              </div>
+              {diceHistory.length === 0 ? (
+                <p className="text-slate-500 text-sm">Todavía no hay tiradas en esta partida.</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {diceHistory.slice(0, 12).map((n, i) => (
+                      <span key={i} className={`px-3 py-1 rounded-full text-sm font-bold ${i === 0 ? "bg-amber-500 text-white" : "bg-slate-700 text-slate-200"}`}>
+                        {n}
+                      </span>
                     ))}
                   </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ── COMERCIAR ── */}
-          {tab === "comerciar" && (
-            <div className="space-y-6">
-              {/* Bank trade */}
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <h3 className="text-slate-300 font-semibold mb-3">Comercio con el banco</h3>
-                <div className="space-y-2">
-                  {RES.map(give => {
-                    const ratio = getTradeRatio(give.id);
-                    if (cur.hand[give.id] < ratio) return null;
-                    return (
-                      <div key={give.id} className="bg-slate-700/50 rounded-xl p-3">
-                        <div className="flex items-center gap-2 mb-2">
-                          <ResBadge id={give.id} count={ratio} small />
-                          <span className="text-slate-200">→</span>
-                          <span className="text-slate-300 text-sm">1 de:</span>
+                  <div className="grid grid-cols-11 gap-1 items-end">
+                    {Array.from({ length: 11 }, (_, k) => k + 2).map(n => {
+                      const v = diceCounts[n] || 0;
+                      return (
+                        <div key={n} className="flex flex-col items-center gap-1">
+                          <div
+                            className="w-full bg-slate-700 rounded-md"
+                            style={{ height: `${Math.min(44, 6 + v * 6)}px` }}
+                            title={`${n}: ${v}`}
+                          />
+                          <span className="text-[10px] text-slate-400">{n}</span>
                         </div>
-                        <div className="flex gap-2 flex-wrap">
-                          {RES.filter(r => r.id !== give.id).map(rec => (
-                            <button key={rec.id} onClick={() => doTrade(give.id, rec.id, ratio)}
-                              disabled={turnPhase !== "rolled"}
-                              className={`${rec.bg} ${rec.tx} px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:opacity-80 active:scale-95`}>
-                              {rec.e} {rec.n}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {RES.every(r => cur.hand[r.id] < getTradeRatio(r.id)) && (
-                    <p className="text-slate-500 text-sm">No tenés suficientes recursos para comerciar con el banco.</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Player trade */}
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <h3 className="text-slate-300 font-semibold mb-3">Comercio entre jugadores</h3>
-                <button onClick={() => { setTradeOther(cp === 0 ? 1 : 0); setTradeGive(eHand()); setTradeReceive(eHand()); setModal({ type: "playerTrade" }); }} disabled={turnPhase !== "rolled"}
-                  className={`w-full py-3 rounded-xl font-bold transition-all ${turnPhase === "rolled" ? "bg-blue-500 hover:bg-blue-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
-                  🤝 Proponer intercambio
-                </button>
-              </div>
-
-              {/* Ports config */}
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <h3 className="text-slate-300 font-semibold mb-3">Puertos de {cur.name}</h3>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {cur.ports.map(port => (
-                    <span key={port} className="bg-blue-800 text-blue-200 px-2 py-1 rounded-lg text-sm flex items-center gap-1">
-                      {port === "3:1" ? "⚓ 3:1" : `${RM[port].e} 2:1`}
-                      <button onClick={() => removePort(port)} className="text-blue-400 hover:text-white ml-1">✕</button>
-                    </span>
-                  ))}
-                  {cur.ports.length === 0 && <span className="text-slate-500 text-sm">Sin puertos</span>}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {!cur.ports.includes("3:1") && (
-                    <button onClick={() => addPort("3:1")} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ ⚓ 3:1</button>
-                  )}
-                  {RES.filter(r => !cur.ports.includes(r.id)).map(r => (
-                    <button key={r.id} onClick={() => addPort(r.id)} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ {r.e} 2:1</button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── CARTAS DE DESARROLLO ── */}
-          {tab === "cartas" && (
-            <div className="space-y-4">
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <h3 className="text-slate-300 font-semibold mb-2">Tus cartas ({cur.devCards.length})</h3>
-                {cur.devCards.length === 0 ? (
-                  <p className="text-slate-500 text-sm">No tenés cartas de desarrollo</p>
-                ) : (
-                  <div className="space-y-2">
-                    {cur.devCards.map((c, i) => (
-                      <div key={i} className="bg-slate-700/50 rounded-xl p-3 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xl">{DC[c].e}</span>
-                          <div>
-                            <div className="text-white text-sm font-medium">{DC[c].n}</div>
-                            <div className="text-slate-400 text-xs">{DC[c].d}</div>
-                          </div>
-                        </div>
-                        {c !== "victoria" && turnPhase === "rolled" && (
-                          <button onClick={() => playDevCard(c, i)}
-                            className="px-3 py-1.5 bg-purple-500 hover:bg-purple-400 text-white rounded-lg text-sm font-medium">
-                            Jugar
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-              <p className="text-slate-500 text-sm text-center">Quedan {deck.length} cartas en el mazo</p>
+                  <p className="text-slate-500 text-xs mt-3">Tip: 6 y 8 son los números más probables. Este gráfico es el historial real de la partida.</p>
+                </>
+              )}
             </div>
           )}
 
@@ -1345,6 +1240,164 @@ export default function CatanApp() {
               </div>
             )}
 
+          {/* ── CONSTRUIR ── */}
+          {modal.type === "build" && (
+            <div className="space-y-4">
+              <h3 className="text-slate-300 font-semibold">Construcciones</h3>
+              {Object.entries(COSTS)
+                .filter(([type]) => mode.showDevCards || type !== "desarrollo")
+                .map(([type, cost]) => {
+                const canBuild = mode.enforceCosts ? (afford(cur.hand, cost) && turnPhase === "rolled") : true;
+                return (
+                  <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
+                    <div>
+                      <div className="text-white font-bold">{COST_EMOJI[type]} {COST_NAMES[type]}</div>
+                      {mode.enforceCosts && (
+                        <div className="flex gap-1 mt-1">
+                          {Object.entries(cost).map(([r, v]) => (
+                            <ResBadge key={r} id={r} count={v} small />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={() => requestBuild(type)} disabled={!canBuild}
+                      className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${canBuild ? "bg-green-500 hover:bg-green-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
+                      Construir
+                    </button>
+                  </div>
+                );
+              })}
+
+              <div className="bg-slate-800/50 rounded-2xl p-4 mt-6">
+                <h3 className="text-slate-300 font-semibold mb-3">Tus propiedades</h3>
+                {getSettlementGroups(cur).length === 0 ? (
+                  <p className="text-slate-500 text-sm">Sin propiedades registradas</p>
+                ) : (
+                  <div className="space-y-2">
+                    {getSettlementGroups(cur).map((g, i) => (
+                      <div key={g.gid} className="flex items-center gap-2 flex-wrap">
+                        <span className="text-white text-sm">{g.isCity ? "🏙️" : "🏠"}</span>
+                        {g.hexes.map(h => (
+                          <span key={h.id} className={`${RM[h.res].bg} ${RM[h.res].tx} px-2 py-0.5 rounded text-xs font-medium`}>
+                            {h.num} {RM[h.res].e}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            
+              <button onClick={() => setModal(null)} className="w-full py-3 bg-slate-700 text-slate-300 rounded-xl font-bold mt-4">Cerrar</button>
+            </div>
+          )}
+
+          {/* ── COMERCIAR ── */}
+          {modal.type === "trade" && (
+            <div className="space-y-6">
+              {/* Bank trade */}
+              <div className="bg-slate-800 rounded-2xl p-4">
+                <h3 className="text-slate-300 font-semibold mb-3">Comercio con el banco</h3>
+                <div className="space-y-2">
+                  {RES.map(give => {
+                    const ratio = getTradeRatio(give.id);
+                    if (cur.hand[give.id] < ratio) return null;
+                    return (
+                      <div key={give.id} className="bg-slate-700/50 rounded-xl p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <ResBadge id={give.id} count={ratio} small />
+                          <span className="text-slate-200">→</span>
+                          <span className="text-slate-300 text-sm">1 de:</span>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          {RES.filter(r => r.id !== give.id).map(rec => (
+                            <button key={rec.id} onClick={() => doTrade(give.id, rec.id, ratio)}
+                              disabled={turnPhase !== "rolled"}
+                              className={`${rec.bg} ${rec.tx} px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:opacity-80 active:scale-95`}>
+                              {rec.e} {rec.n}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {RES.every(r => cur.hand[r.id] < getTradeRatio(r.id)) && (
+                    <p className="text-slate-500 text-sm">No tenés suficientes recursos para comerciar con el banco.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Player trade */}
+              <div className="bg-slate-800 rounded-2xl p-4">
+                <h3 className="text-slate-300 font-semibold mb-3">Comercio entre jugadores</h3>
+                <button onClick={() => { setTradeOther(cp === 0 ? 1 : 0); setTradeGive(eHand()); setTradeReceive(eHand()); setModal({ type: "playerTrade" }); }} disabled={turnPhase !== "rolled"}
+                  className={`w-full py-3 rounded-xl font-bold transition-all ${turnPhase === "rolled" ? "bg-blue-500 hover:bg-blue-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
+                  🤝 Proponer intercambio
+                </button>
+              </div>
+
+              {/* Ports config */}
+              <div className="bg-slate-800 rounded-2xl p-4">
+                <h3 className="text-slate-300 font-semibold mb-3">Puertos de {cur.name}</h3>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {cur.ports.map(port => (
+                    <span key={port} className="bg-blue-800 text-blue-200 px-2 py-1 rounded-lg text-sm flex items-center gap-1">
+                      {port === "3:1" ? "⚓ 3:1" : `${RM[port].e} 2:1`}
+                      <button onClick={() => removePort(port)} className="text-blue-400 hover:text-white ml-1">✕</button>
+                    </span>
+                  ))}
+                  {cur.ports.length === 0 && <span className="text-slate-500 text-sm">Sin puertos</span>}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {!cur.ports.includes("3:1") && (
+                    <button onClick={() => addPort("3:1")} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ ⚓ 3:1</button>
+                  )}
+                  {RES.filter(r => !cur.ports.includes(r.id)).map(r => (
+                    <button key={r.id} onClick={() => addPort(r.id)} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ {r.e} 2:1</button>
+                  ))}
+                </div>
+              </div>
+            
+              <button onClick={() => setModal(null)} className="w-full py-3 bg-slate-700 text-slate-300 rounded-xl font-bold mt-4">Cerrar</button>
+            </div>
+          )}
+
+          {/* ── CARTAS DE DESARROLLO ── */}
+          {modal.type === "cards" && (
+            <div className="space-y-4">
+              <div className="bg-slate-800 rounded-2xl p-4">
+                <h3 className="text-slate-300 font-semibold mb-2">Tus cartas ({cur.devCards.length})</h3>
+                {cur.devCards.length === 0 ? (
+                  <p className="text-slate-500 text-sm">No tenés cartas de desarrollo</p>
+                ) : (
+                  <div className="space-y-2">
+                    {cur.devCards.map((c, i) => (
+                      <div key={i} className="bg-slate-700/50 rounded-xl p-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">{DC[c].e}</span>
+                          <div>
+                            <div className="text-white text-sm font-medium">{DC[c].n}</div>
+                            <div className="text-slate-400 text-xs">{DC[c].d}</div>
+                          </div>
+                        </div>
+                        {c !== "victoria" && turnPhase === "rolled" && (
+                          <button onClick={() => playDevCard(c, i)}
+                            className="px-3 py-1.5 bg-purple-500 hover:bg-purple-400 text-white rounded-lg text-sm font-medium">
+                            Jugar
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <p className="text-slate-500 text-sm text-center">Quedan {deck.length} cartas en el mazo</p>
+            
+              <button onClick={() => setModal(null)} className="w-full py-3 bg-slate-700 text-slate-300 rounded-xl font-bold mt-4">Cerrar</button>
+            </div>
+          )}
+
+
             {/* Undo confirmation */}
             {modal.type === "undo" && (() => {
               const eff = effectiveActions(actions);
@@ -1424,7 +1477,10 @@ export default function CatanApp() {
               const discarded = totalC(modalDiscards);
               return (
                 <div>
-                  <h3 className="text-xl font-bold text-red-400 mb-2">🦹 ¡Salió 7!</h3>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h3 className="text-xl font-bold text-red-400">🦹 ¡Salió un 7!</h3>
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-red-900/60 text-red-300 px-2 py-0.5 rounded-full">Paso 1 de 3 · Descartes</span>
+                  </div>
                   {/* Summary: who has too many cards and must discard */}
                   <div className="bg-slate-900/60 border border-red-900/40 rounded-xl p-3 mb-4">
                     <div className="text-xs font-bold uppercase tracking-wider text-red-300/80 mb-2">Descartes pendientes</div>
@@ -1474,7 +1530,7 @@ export default function CatanApp() {
                         setModalDiscards(eHand());
                         setModal(prev => ({ ...prev, current: prev.current + 1 }));
                       } else {
-                        setModal({ type: "robber" });
+                        setModal({ type: "robber", from7: true });
                       }
                     }}
                     className={`w-full py-3 rounded-xl font-bold ${discarded === mustDiscard ? "bg-red-500 hover:bg-red-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
@@ -1487,7 +1543,10 @@ export default function CatanApp() {
             {/* Robber placement */}
             {modal.type === "robber" && (
               <div>
-                <h3 className="text-xl font-bold text-red-400 mb-2">🦹 Colocar el ladrón</h3>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="text-xl font-bold text-red-400">🦹 Colocar el ladrón</h3>
+                  {modal.from7 && <span className="text-[10px] font-bold uppercase tracking-wider bg-red-900/60 text-red-300 px-2 py-0.5 rounded-full">Paso 2 de 3</span>}
+                </div>
                 <p className="text-slate-300 text-sm mb-4">Elegí en qué número colocar el ladrón para bloquear la producción.</p>
                 <div className="grid grid-cols-5 gap-2 mb-4">
                   {NUMS.map(n => (
@@ -1506,7 +1565,10 @@ export default function CatanApp() {
             {/* Steal */}
             {modal.type === "steal" && (
               <div>
-                <h3 className="text-xl font-bold text-red-400 mb-2">🦹 Robar una carta</h3>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="text-xl font-bold text-red-400">🦹 Robar una carta</h3>
+                  {modal.from7 && <span className="text-[10px] font-bold uppercase tracking-wider bg-red-900/60 text-red-300 px-2 py-0.5 rounded-full">Paso 3 de 3</span>}
+                </div>
                 <p className="text-slate-300 text-sm mb-4">Elegí a quién le robás una carta al azar.</p>
                 <div className="space-y-2">
                   {modal.victims.map(vi => (
