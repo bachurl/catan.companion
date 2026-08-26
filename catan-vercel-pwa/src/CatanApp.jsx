@@ -46,7 +46,7 @@ export default function CatanApp() {
   });
 
   // UI / setup state
-  const [phase, setPhase] = useState("mode");
+  const [phase, setPhase] = useState("welcome");
   const [gameMode, setGameMode] = useState("full");
   const [pCount, setPCount] = useState(3);
   const [setupPlayers, setSetupPlayers] = useState([]);
@@ -182,7 +182,7 @@ export default function CatanApp() {
     setSetupData({});
     setModal(null);
     setTab("turno");
-    setPhase("mode");
+    setPhase("welcome");
   };
 
   // ── GAME HANDLERS ──
@@ -455,19 +455,19 @@ export default function CatanApp() {
   };
 
   // ═══════════════════════════════════════════════
-  //  RENDER: SETUP - MODE
+  //  RENDER: BIENVENIDA
   // ═══════════════════════════════════════════════
-  if (phase === "mode") return (
+  if (phase === "welcome") return (
     <div className="catan-app">
       <style>{STYLE_CSS}</style>
       <div className="catan-container center-screen">
         <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full text-center shadow-2xl border border-amber-600/30">
           <div className="text-6xl mb-4">🏝️</div>
           <h1 className="text-4xl font-bold text-amber-400 mb-2">Catán</h1>
-          <p className="text-slate-400 mb-6">Companion App</p>
+          <p className="text-slate-400 mb-7">Companion App</p>
 
           {savedGame && (
-            <div className="mb-6 p-4 rounded-2xl border-2 border-emerald-500/60 bg-emerald-500/10 text-left">
+            <div className="mb-5 p-4 rounded-2xl border-2 border-emerald-500/60 bg-emerald-500/10 text-left">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-2xl">💾</span>
                 <span className="font-bold text-emerald-300">Partida en curso</span>
@@ -491,40 +491,13 @@ export default function CatanApp() {
             </div>
           )}
 
-          <p className="text-slate-300 mb-5 text-lg">Elegí el modo de juego</p>
-          <div className="space-y-3 mb-6">
-            <button
-              onClick={() => setGameMode("full")}
-              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${gameMode === "full" ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:border-slate-600"}`}
-            >
-              <div className="flex items-center gap-3">
-                <div className="text-3xl">🎯</div>
-                <div className="flex-1">
-                  <div className="font-bold text-amber-300 text-lg">Completo</div>
-                  <div className="text-slate-400 text-sm">Conteo de cartas, costos de construcción, descarte en 7, cartas de desarrollo.</div>
-                </div>
-              </div>
-            </button>
-            <button
-              onClick={() => setGameMode("simple")}
-              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${gameMode === "simple" ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:border-slate-600"}`}
-            >
-              <div className="flex items-center gap-3">
-                <div className="text-3xl">✍️</div>
-                <div className="flex-1">
-                  <div className="font-bold text-amber-300 text-lg">Simple</div>
-                  <div className="text-slate-400 text-sm">Dado manual, distribución de cartas y construcciones libres para llevar el score.</div>
-                </div>
-              </div>
-            </button>
-          </div>
-          <button onClick={() => setPhase("count")}
-            className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
-            Siguiente →
+          <button onClick={() => setPhase("config")}
+            className="w-full py-4 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-2xl text-lg transition-all shadow-lg shadow-amber-500/20 mb-3">
+            🎲 Nueva partida
           </button>
 
           {online.isConfigured && (
-            <div className="mt-6 pt-5 border-t border-slate-700/60">
+            <div className="mt-4 pt-5 border-t border-slate-700/60">
               <p className="text-slate-400 text-sm mb-2">🌐 ¿Te invitaron a una partida?</p>
               <div className="flex gap-2">
                 <input
@@ -549,35 +522,62 @@ export default function CatanApp() {
   );
 
   // ═══════════════════════════════════════════════
-  //  RENDER: SETUP - PLAYER COUNT
+  //  RENDER: SETUP - MODO + JUGADORES (paso 1 de 3)
   // ═══════════════════════════════════════════════
-  if (phase === "count") return (
+  if (phase === "config") return (
     <div className="catan-app">
       <style>{STYLE_CSS}</style>
       <div className="catan-container center-screen">
         <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full text-center shadow-2xl border border-amber-600/30">
-        <div className="text-6xl mb-4">🏝️</div>
-        <h1 className="text-4xl font-bold text-amber-400 mb-2">Catán</h1>
-        <p className="text-slate-400 mb-2">Companion App</p>
-        <p className="text-amber-500/80 text-xs font-semibold uppercase tracking-wider mb-6">Modo {gameMode === "full" ? "Completo" : "Simple"}</p>
-        <p className="text-slate-300 mb-4 text-lg">¿Cuántos jugadores?</p>
-        <div className="flex gap-3 justify-center mb-8">
-          {[2, 3, 4, 5, 6].map(n => (
-            <button key={n} onClick={() => setPCount(n)}
-              className={`w-14 h-14 rounded-xl text-xl font-bold transition-all ${pCount === n ? "bg-amber-500 text-white scale-110 shadow-lg shadow-amber-500/30" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
-              {n}
+          <p className="text-amber-500/80 text-xs font-semibold uppercase tracking-wider mb-4">Nueva partida · Paso 1 de 3</p>
+
+          <p className="text-slate-300 mb-3 text-lg font-semibold">¿Cómo juegan?</p>
+          <div className="space-y-3 mb-7">
+            <button
+              onClick={() => setGameMode("simple")}
+              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${gameMode === "simple" ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:border-slate-600"}`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="text-3xl">✍️</div>
+                <div className="flex-1">
+                  <div className="font-bold text-amber-300 text-lg">Simple</div>
+                  <div className="text-slate-400 text-sm">Anotás lo que pasa en la mesa: el número que salió, qué se construyó. La app lleva cartas y puntos.</div>
+                </div>
+              </div>
             </button>
-          ))}
+            <button
+              onClick={() => setGameMode("full")}
+              className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${gameMode === "full" ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:border-slate-600"}`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="text-3xl">🎯</div>
+                <div className="flex-1">
+                  <div className="font-bold text-amber-300 text-lg">Completo</div>
+                  <div className="text-slate-400 text-sm">La app reemplaza los dados y controla las reglas: costos, descartes con el 7, cartas de desarrollo.</div>
+                </div>
+              </div>
+            </button>
+          </div>
+
+          <p className="text-slate-300 mb-3 text-lg font-semibold">¿Cuántos jugadores?</p>
+          <div className="flex gap-3 justify-center mb-8">
+            {[2, 3, 4, 5, 6].map(n => (
+              <button key={n} onClick={() => setPCount(n)}
+                className={`w-14 h-14 rounded-xl text-xl font-bold transition-all ${pCount === n ? "bg-amber-500 text-white scale-110 shadow-lg shadow-amber-500/30" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
+                {n}
+              </button>
+            ))}
+          </div>
+
+          <button onClick={initPlayers}
+            className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
+            Siguiente →
+          </button>
+          <button onClick={() => setPhase("welcome")}
+            className="w-full mt-3 py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
+            ← Volver
+          </button>
         </div>
-        <button onClick={initPlayers}
-          className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
-          Siguiente →
-        </button>
-        <button onClick={() => setPhase("mode")}
-          className="w-full mt-3 py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
-          ← Cambiar modo
-        </button>
-      </div>
       </div>
     </div>
   );
@@ -589,6 +589,7 @@ export default function CatanApp() {
     <div className="catan-app flex items-center justify-center p-4">
       <style>{STYLE_CSS}</style>
       <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full shadow-2xl border border-amber-600/30" style={{position:"relative",zIndex:1}}>
+        <p className="text-amber-500/80 text-xs font-semibold uppercase tracking-wider mb-3 text-center">Nueva partida · Paso 2 de 3</p>
         <h2 className="text-2xl font-bold text-amber-400 mb-2 text-center">Nombres y colores</h2>
         <p className="text-slate-400 text-xs text-center mb-5">El orden de la lista es el orden de turnos. Usá las flechas para reordenar.</p>
         <div className="space-y-3 mb-8">
@@ -651,7 +652,11 @@ export default function CatanApp() {
         </div>
         <button onClick={() => { setSetupIdx(0); setPhase("settlements"); }}
           className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all">
-          Configurar poblados →
+          Poblados iniciales →
+        </button>
+        <button onClick={() => setPhase("config")}
+          className="w-full mt-3 py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
+          ← Volver
         </button>
       </div>
     </div>
@@ -693,6 +698,7 @@ export default function CatanApp() {
         <style>{STYLE_CSS}</style>
         <div className="max-w-lg mx-auto" style={{position:"relative",zIndex:1}}>
           <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
+            <p className="text-amber-500/80 text-xs font-semibold uppercase tracking-wider mb-3">Nueva partida · Paso 3 de 3 (opcional)</p>
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor:COLORS[setupPlayers[setupIdx]?.ci ?? setupIdx].h}}>
                 {setupIdx + 1}
@@ -757,6 +763,11 @@ export default function CatanApp() {
                 <div key={i} className={`w-3 h-3 rounded-full transition-all ${i === setupIdx ? "scale-125" : ""}`} style={{backgroundColor: i === setupIdx ? COLORS[setupPlayers[i]?.ci ?? i].h : "#475569"}} />
               ))}
             </div>
+
+            <button onClick={startGame}
+              className="w-full mt-5 py-2.5 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all border border-slate-700 rounded-xl">
+              Empezar sin cargar poblados (se agregan después desde 👥 Jugadores)
+            </button>
           </div>
         </div>
       </div>
