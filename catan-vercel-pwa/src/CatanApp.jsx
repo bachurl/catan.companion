@@ -262,16 +262,22 @@ export default function CatanApp() {
     setModal(null);
   };
 
+  // Qué recursos faltan para pagar un costo, en formato "1🌲 2🧱"
+  const missingFor = (hand, cost) => Object.entries(cost)
+    .filter(([r, v]) => (hand[r] || 0) < v)
+    .map(([r, v]) => `${v - (hand[r] || 0)}${RM[r].e}`)
+    .join(" ");
+
   // Construir con confirmación + error claro
   const requestBuild = (type) => {
     if (mode.enforceCosts) {
       if (turnPhase !== "rolled") {
-        showNotif("Primero tirá los dados (y esperá a que se distribuyan recursos)");
+        showNotif("Todavía no salió el número de este turno");
         return;
       }
       const cost = COSTS[type];
       if (!afford(players[cp].hand, cost)) {
-        showNotif("No se puede: te faltan recursos");
+        showNotif(`Te falta: ${missingFor(players[cp].hand, cost)}`);
         return;
       }
     }
@@ -280,7 +286,7 @@ export default function CatanApp() {
 
   const doBuild = (type) => {
     const cost = COSTS[type];
-    if (mode.enforceCosts && !afford(players[cp].hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
+    if (mode.enforceCosts && !afford(players[cp].hand, cost)) { showNotif(`Te falta: ${missingFor(players[cp].hand, cost)}`); return; }
 
     if (type === "camino") {
       dispatch({ type: "BUILD_ROAD" });
@@ -690,7 +696,7 @@ export default function CatanApp() {
               </div>
               <div>
                 <h2 className="text-xl font-bold text-amber-400">{setupPlayers[setupIdx]?.name}</h2>
-                <p className="text-slate-400 text-sm">Configurá los hexágonos de tus 2 poblados iniciales</p>
+                <p className="text-slate-400 text-sm">¿Junto a qué números están tus 2 poblados?</p>
               </div>
             </div>
 
@@ -702,7 +708,7 @@ export default function CatanApp() {
                     <div key={hi} className="flex items-center gap-2">
                       <select value={hex.num} onChange={e => updateHex(si, hi, "num", e.target.value)}
                         className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Nro</option>
+                        <option value="">N°</option>
                         {NUMS.map(n => <option key={n} value={n}>{n} {dotStr(n)}</option>)}
                       </select>
                       <select value={hex.res} onChange={e => updateHex(si, hi, "res", e.target.value)}
@@ -840,7 +846,7 @@ export default function CatanApp() {
             {turnPhase === "rolled" && (
               <button onClick={endTurn}
                 className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-lg text-sm transition-all">
-                Fin turno →
+                Terminar turno →
               </button>
             )}
           </div>
@@ -909,13 +915,13 @@ export default function CatanApp() {
                     </button>
                     <button onClick={() => setManualPickerOpen(true)}
                       style={{background:"transparent",color:"#d4a853",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:700,fontSize:"0.92rem",padding:"6px 14px",borderRadius:10,border:"1px solid rgba(212,168,83,.35)",cursor:"pointer",textAlign:"center"}}>
-                      ✍️ Ingresar manual
+                      ✍️ Anotar tirada de la mesa
                     </button>
                   </div>
                 )}
                 {turnPhase === "preroll" && (mode.manualDiceOnly || manualPickerOpen) && (
                   <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)"}}>
-                    <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:12,textAlign:"center",letterSpacing:1}}>✍️ Ingresar número de dados</div>
+                    <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:12,textAlign:"center",letterSpacing:1}}>¿Qué número salió en los dados?</div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(6, 1fr)",gap:8,marginBottom:12}}>
                       {Array.from({ length: 11 }, (_, k) => k + 2).map(n => (
                         <button key={n} onClick={() => doManualRoll(n)}
@@ -1492,7 +1498,7 @@ export default function CatanApp() {
                   ))}
                 </div>
                 <button onClick={() => { setModal(null); }} className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-sm">
-                  Saltar (sin ladrón)
+                  El ladrón queda donde está
                 </button>
               </div>
             )}
@@ -1565,7 +1571,7 @@ export default function CatanApp() {
                       <div key={i} className="flex gap-2">
                         <select value={h.num} onChange={e => { const nh = [...modalHexes]; nh[i] = { ...nh[i], num: e.target.value }; setModalHexes(nh); }}
                           className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600">
-                          <option value="">Nro</option>
+                          <option value="">N°</option>
                           {NUMS.map(n => <option key={n} value={n}>{n}</option>)}
                         </select>
                         <select value={h.res} onChange={e => { const nh = [...modalHexes]; nh[i] = { ...nh[i], res: e.target.value }; setModalHexes(nh); }}
