@@ -291,7 +291,8 @@ export default function CatanApp() {
 
     if (type === "camino") {
       dispatch({ type: "BUILD_ROAD" });
-      showNotif("Camino construido");
+      const total = players[cp].roadsBuilt + 1;
+      showNotif(total > 15 ? `Camino construido — ⚠️ llevás ${total}, el juego trae 15 por jugador` : "Camino construido");
     } else if (type === "poblado") {
       setModalHexes([{ num: "", res: "" }]);
       setModal({ type: "newSettlement", building: "poblado" });
@@ -305,15 +306,28 @@ export default function CatanApp() {
     }
   };
 
+  const countSettlements = (p) => {
+    const grp = {};
+    p.productions.forEach(pr => {
+      if (!grp[pr.gid]) grp[pr.gid] = false;
+      if (pr.isCity) grp[pr.gid] = true;
+    });
+    return Object.values(grp).filter(c => !c).length;
+  };
+
   const addSettlement = (hexes) => {
     dispatch({ type: "ADD_SETTLEMENT", hexes });
-    showNotif("Poblado construido");
+    const total = countSettlements(players[cp]) + 1;
+    showNotif(total > 5 ? `Poblado construido — ⚠️ tenés ${total} en el tablero, el juego trae 5` : "Poblado construido");
     setModal(null);
   };
 
   const upgradeToCity = (gidVal) => {
     dispatch({ type: "UPGRADE_CITY", gid: gidVal });
-    showNotif("Ciudad construida");
+    const cities = players[cp].productions.length
+      ? Object.values(players[cp].productions.reduce((acc, pr) => { acc[pr.gid] = acc[pr.gid] || pr.isCity; return acc; }, {})).filter(Boolean).length + 1
+      : 1;
+    showNotif(cities > 4 ? `Ciudad construida — ⚠️ tenés ${cities}, el juego trae 4 por jugador` : "Ciudad construida");
     setModal(null);
   };
 
@@ -788,6 +802,9 @@ export default function CatanApp() {
     { id: "log", label: "Log", e: "📋" },
   ];
 
+  // Online: si reclamaste un jugador y no es tu turno, mirás sin operar.
+  const isSpectating = online.myPlayerIndex !== null && online.myPlayerIndex !== cp;
+
   // Group settlements for display
   const getSettlementGroups = (p) => {
     const groups = {};
@@ -918,7 +935,33 @@ export default function CatanApp() {
                   <span style={{fontFamily:"'Cinzel',serif",fontSize:20,fontWeight:800,color:"#f0e6d3"}}>Turno de {cur.name}</span>
                 </div>
 
-                {turnPhase === "preroll" && (
+                {isSpectating && (
+                  <div style={{width:"100%",maxWidth:480,margin:"0 auto",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}>
+                    {turnPhase === "rolled" && dice[0] > 0 ? (
+                      <>
+                        <div className="flex gap-4">
+                          <DiceFace value={dice[0]} />
+                          <DiceFace value={dice[1]} />
+                        </div>
+                        <div style={{fontSize:44,fontWeight:900,color:"#f0d48a",fontFamily:"'Cinzel',serif",lineHeight:1}}>{diceSum}</div>
+                        {diceSum !== 7 && lastDistribution?.num === diceSum && lastDistribution.lines.length > 0 && (
+                          <div style={{width:"100%",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"14px 18px"}}>
+                            {lastDistribution.lines.map((l, idx) => (
+                              <div key={idx} style={{color:"#f0e6d3",fontWeight:600,fontSize:14,padding:"4px 0"}}>
+                                {playerMark(l.ci)} <b>{l.name}</b> → <span style={{color:"#2ecc71",fontWeight:800}}>{l.items}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p style={{color:"#a89278",fontWeight:700,fontSize:15,margin:"8px 0 0"}}>⏳ Esperando a que {cur.name} tire los dados...</p>
+                    )}
+                    <p style={{color:"#64748b",fontSize:12,margin:0}}>Estás mirando — juega {cur.name} desde su dispositivo</p>
+                  </div>
+                )}
+
+                {!isSpectating && turnPhase === "preroll" && (
                   <>
                     {/* El turno arranca con los dados: no hay otra acción visible */}
                     {!mode.manualDiceOnly && !manualPickerOpen && (
@@ -976,7 +1019,7 @@ export default function CatanApp() {
                   </>
                 )}
 
-                {turnPhase === "rolled" && (
+                {!isSpectating && turnPhase === "rolled" && (
                   <>
                     <div className="flex gap-4">
                       {dice[0] > 0 && (
@@ -1269,6 +1312,9 @@ export default function CatanApp() {
                             <ResBadge key={r} id={r} count={v} small />
                           ))}
                         </div>
+                      )}
+                      {mode.enforceCosts && !canBuild && missingFor(cur.hand, cost) && (
+                        <div className="text-red-300/90 text-xs font-semibold mt-1.5">Te falta: {missingFor(cur.hand, cost)}</div>
                       )}
                     </div>
                     <button onClick={() => requestBuild(type)} disabled={!canBuild}
