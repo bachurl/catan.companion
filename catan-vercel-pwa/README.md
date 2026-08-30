@@ -1,8 +1,10 @@
 # Catán Companion
 
-PWA para acompañar partidas de Catán: dados (aleatorios o manuales), distribución de
-recursos, construcciones, cartas de desarrollo, puntaje, y multijugador online
-multidispositivo.
+PWA para acompañar partidas de Catán: dados (aleatorios o manuales, ideal para tirar
+dados físicos y repartir desde la app), distribución de recursos, construcciones,
+cartas de desarrollo, puntaje, y multijugador online multidispositivo: cada celular
+reclama su jugador, ve su mano y juega su turno (construir, comerciar, terminar turno);
+el resto del tiempo sigue la partida en vivo.
 
 ## Desarrollo
 

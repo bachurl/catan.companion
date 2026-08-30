@@ -31,7 +31,9 @@ Esto habilita con una sola pieza:
 - [x] **B1** Proyecto Supabase, auth anónima, tablas `rooms` + `actions` con RLS y secuencia por sala.
 - [x] **B2** Crear sala / unirse con código corto + QR; lobby con presencia.
 - [x] **B3** Sync de acciones: local → Supabase → Realtime → todos. Cola offline, indicador online/offline.
-- [x] **B4** (parcial) Vista por jugador: cada celular reclama un jugador, ve su mano y el aviso de su turno. Pendiente: gating duro de acciones por turno (hoy cualquier dispositivo puede operar, estilo mesa).
+- [x] **B4** Vista por jugador: cada celular reclama un jugador, ve su mano, sus cartas de desarrollo y el aviso de su turno.
+- [x] **B5** Gating por turno: con jugador reclamado solo se actúa en el turno propio (ingresar/tirar dados, construir, comerciar, jugar cartas, terminar turno). El host puede corregir siempre (ajustes manuales, deshacer, reordenar); un celular sin jugador reclamado controla la mesa completa (fallback si se apaga un teléfono).
+- [x] **B6** UX multi-celular: botón grande "Terminar mi turno", vibración + aviso al empezar tu turno, teclado de dados manual recordado (para dados físicos), compartir código de sala con link `?sala=CODIGO` que precarga el código.
 
 Decisión v1: el creador de la sala carga el setup (nombres, poblados); los demás se unen y juegan.
 
