@@ -4,6 +4,10 @@ export const describeAction = (action, preState) => {
   const name = (i) => preState.players[i]?.name || `Jugador ${i + 1}`;
   const cpName = name(preState.cp);
   switch (action.type) {
+    case "CREATE_LOBBY": return "Creación de la sala";
+    case "SET_PLAYER_NAME": return `Nombre/color de ${name(action.player)}`;
+    case "SET_INITIAL_SETTLEMENTS": return `Poblados iniciales de ${name(action.player)}`;
+    case "BEGIN_GAME": return "Comienzo de la partida";
     case "START_GAME": return "Inicio de partida";
     case "ROLL": return `${action.manual ? "Número ingresado" : "Tirada de dados"}: ${action.d1 + action.d2} (${cpName})`;
     case "DISCARD": return `Descarte de ${name(action.player)}`;

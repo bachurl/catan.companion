@@ -20,6 +20,8 @@ const TURN_ACTIONS = new Set([
   "TRADE_BANK", "TRADE_PLAYER", "ADD_PORT", "REMOVE_PORT", "END_TURN",
 ]);
 const FIX_ACTIONS = new Set(["MANUAL_ADJUST", "ADD_FREE_SETTLEMENT", "MOVE_PLAYER", "UNDO"]);
+// En el lobby, cada celular edita solo a su jugador (el host o la mesa, a cualquiera).
+const LOBBY_ACTIONS = new Set(["SET_PLAYER_NAME", "SET_INITIAL_SETTLEMENTS"]);
 
 // Preferencia local: quien tira dados físicos ve el teclado 2-12 directo.
 const PREF_MANUAL_KEY = "catan.dadosManuales.v1";
@@ -56,28 +58,42 @@ export default function CatanApp() {
   // actúa en su turno; correcciones (ajustes, deshacer) también las hace el
   // host. Un celular sin jugador reclamado controla la mesa completa.
   const dispatch = useCallback((action) => {
-    if (online.room && online.myPlayerIndex !== null && online.myPlayerIndex !== game.cp) {
-      if (FIX_ACTIONS.has(action.type)) {
-        if (!online.room.isHost) {
-          showNotif("Solo el anfitrión puede corregir fuera de su turno");
+    if (online.room && online.myPlayerIndex !== null) {
+      if (!game.started) {
+        // Lobby: cada uno edita su propio jugador; el host (o un celular sin
+        // jugador reclamado) puede editar a cualquiera y comenzar la partida.
+        if (LOBBY_ACTIONS.has(action.type) && action.player !== online.myPlayerIndex && !online.room.isHost) {
+          showNotif("Solo podés editar tu propio jugador");
           return null;
         }
-      } else if (TURN_ACTIONS.has(action.type)) {
-        showNotif(`⏳ Es el turno de ${game.players[game.cp]?.name || "otro jugador"}`);
-        return null;
+        if (action.type === "BEGIN_GAME" && !online.room.isHost) {
+          showNotif("Solo el anfitrión puede comenzar la partida");
+          return null;
+        }
+      } else if (online.myPlayerIndex !== game.cp) {
+        if (FIX_ACTIONS.has(action.type)) {
+          if (!online.room.isHost) {
+            showNotif("Solo el anfitrión puede corregir fuera de su turno");
+            return null;
+          }
+        } else if (TURN_ACTIONS.has(action.type)) {
+          showNotif(`⏳ Es el turno de ${game.players[game.cp]?.name || "otro jugador"}`);
+          return null;
+        }
       }
     }
     const stamped = dispatchAction(action);
     if (online.room) online.pushAction(stamped);
     return stamped;
-  }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.cp, game.players, showNotif]);
+  }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.started, game.cp, game.players, showNotif]);
 
   // Partida guardada pendiente de retomar (si existe y no terminó)
   const [savedGame, setSavedGame] = useState(() => {
     const saved = loadSavedGame();
     if (!saved) return null;
     const state = replayActions(saved.actions);
-    if (!state.started || isGameFinished(state)) return null;
+    // Un lobby guardado (sala creada, partida sin empezar) también se retoma.
+    if (!(state.started || state.inLobby) || isGameFinished(state)) return null;
     return { actions: saved.actions, state, roomCode: loadSavedRoomCode() };
   });
 
@@ -104,6 +120,12 @@ export default function CatanApp() {
   const [tradeOther, setTradeOther] = useState(0);
   const [tradeGive, setTradeGive] = useState(eHand());
   const [tradeReceive, setTradeReceive] = useState(eHand());
+  // Lobby: asiento en edición (null = el jugador reclamado) + editor local
+  const [lobbyBusy, setLobbyBusy] = useState(false);
+  const [editingSeat, setEditingSeat] = useState(null);
+  const [seatLoaded, setSeatLoaded] = useState(null);
+  const [seatName, setSeatName] = useState("");
+  const [lobbySett, setLobbySett] = useState([{ hexes: [{ num: "", res: "" }] }, { hexes: [{ num: "", res: "" }] }]);
 
   const { players, cp, turnPhase, dice, deck, robber, turn, diceHistory, lastDistribution, log } = game;
   const mode = GAME_MODES[game.started ? game.gameMode : gameMode];
@@ -164,13 +186,41 @@ export default function CatanApp() {
     if (game.started) setManualPickerOpen(loadPrefManual());
   }, [game.started, cp, turn]);
 
+  // ── TRANSICIÓN LOBBY ⇄ JUEGO ──
+  // Cuando llega BEGIN_GAME (local o remoto) el lobby pasa a juego; si un
+  // deshacer vuelve la partida al lobby, la pantalla acompaña.
+  useEffect(() => {
+    if (phase === "lobby" && game.started) {
+      setPhase("game");
+      setTab("dados");
+      setEditingSeat(null);
+    } else if (phase === "game" && !game.started && game.inLobby) {
+      setPhase("lobby");
+    }
+  }, [phase, game.started, game.inLobby]);
+
+  // Carga en el editor local los datos del asiento a editar (una sola vez por asiento).
+  useEffect(() => {
+    const seat = editingSeat ?? myIdx;
+    if (!game.inLobby || seat === null || seat === seatLoaded) return;
+    const p = players[seat];
+    if (!p) return;
+    setSeatName(p.name);
+    const groups = {};
+    p.productions.forEach(pr => { (groups[pr.gid] = groups[pr.gid] || []).push(pr); });
+    const setts = Object.values(groups).map(hexes => ({ hexes: hexes.map(h => ({ num: String(h.num), res: h.res })) }));
+    while (setts.length < 2) setts.push({ hexes: [{ num: "", res: "" }] });
+    setLobbySett(setts.slice(0, 2));
+    setSeatLoaded(seat);
+  }, [editingSeat, myIdx, game.inLobby, players, seatLoaded]);
+
   // ── CONTINUAR PARTIDA ──
   const continueSavedGame = () => {
     if (!savedGame) return;
     replaceActions(savedGame.actions);
     setWinner(null);
     setTab("dados");
-    setPhase("game");
+    setPhase(savedGame.state.started ? "game" : "lobby");
     // Si la partida guardada era online, intenta reconectar a la sala:
     // el servidor pisa el log local con el orden canónico + realtime.
     if (savedGame.roomCode && online.isConfigured) {
@@ -239,6 +289,9 @@ export default function CatanApp() {
     setSetupData({});
     setModal(null);
     setTab("dados");
+    setEditingSeat(null);
+    setSeatLoaded(null);
+    lastTurnNotifRef.current = null;
     setPhase("mode");
   };
 
@@ -475,6 +528,64 @@ export default function CatanApp() {
     }
   };
 
+  // ── LOBBY ONLINE ──
+  // Crea la sala apenas se elige modo y cantidad: primero la sala vacía,
+  // después CREATE_LOBBY (ya con sala, se publica solo).
+  const createLobbyRoom = async () => {
+    setLobbyBusy(true);
+    try {
+      const r = await online.createRoom([]);
+      resetGame(); // el lobby arranca con log limpio (descarta cualquier partida local previa)
+      dispatch({ type: "CREATE_LOBBY", mode: gameMode, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
+      setSavedGame(null);
+      setWinner(null);
+      setEditingSeat(null);
+      setSeatLoaded(null);
+      setPhase("lobby");
+      showNotif(`🌐 Sala creada: ${r.code}. Compartí el código.`);
+    } catch (e) {
+      showNotif(`No se pudo crear la sala: ${e.message}`);
+    }
+    setLobbyBusy(false);
+  };
+
+  const saveSeatName = (seat) => {
+    if (seat === null || !seatName.trim() || seatName.trim() === players[seat]?.name) return;
+    dispatch({ type: "SET_PLAYER_NAME", player: seat, name: seatName.trim() });
+  };
+
+  const setSeatColor = (seat, ci) => {
+    if (seat === null) return;
+    dispatch({ type: "SET_PLAYER_NAME", player: seat, ci });
+  };
+
+  const saveSeatSettlements = (seat) => {
+    if (seat === null) return;
+    const cleaned = lobbySett
+      .map(s => ({ hexes: s.hexes.filter(h => h.num && h.res) }))
+      .filter(s => s.hexes.length > 0);
+    if (cleaned.length === 0) { showNotif("Cargá al menos un hexágono (número + recurso)"); return; }
+    saveSeatName(seat);
+    dispatch({ type: "SET_INITIAL_SETTLEMENTS", player: seat, settlements: cleaned });
+    showNotif("💾 Poblados guardados");
+  };
+
+  const updateLobbyHex = (si, hi, field, val) => setLobbySett(prev => {
+    const np = prev.map(s => ({ hexes: s.hexes.map(h => ({ ...h })) }));
+    np[si].hexes[hi][field] = val;
+    return np;
+  });
+  const addLobbyHex = (si) => setLobbySett(prev => {
+    const np = prev.map(s => ({ hexes: [...s.hexes] }));
+    if (np[si].hexes.length < 3) np[si].hexes.push({ num: "", res: "" });
+    return np;
+  });
+  const removeLobbyHex = (si, hi) => setLobbySett(prev => {
+    const np = prev.map(s => ({ hexes: [...s.hexes] }));
+    np[si].hexes = np[si].hexes.filter((_, j) => j !== hi);
+    return np;
+  });
+
   // Comparte el código de sala con un link que lo precarga (?sala=CODIGO).
   const shareRoomCode = async () => {
     if (!online.room) return;
@@ -493,11 +604,14 @@ export default function CatanApp() {
       const { actions: remoteActions } = await online.joinRoom(code);
       if (remoteActions.length === 0) throw new Error("La sala está vacía.");
       replaceActions(remoteActions);
+      const st = replayActions(remoteActions);
       setSavedGame(null);
       setWinner(null);
       setTab("dados");
-      setPhase("game");
-      showNotif("🌐 Conectado a la sala");
+      setEditingSeat(null);
+      setSeatLoaded(null);
+      setPhase(st.started ? "game" : "lobby");
+      showNotif(st.started ? "🌐 Conectado a la sala" : "🌐 Te uniste. ¡Elegí tu jugador!");
     } catch (e) {
       showNotif(e.message || "No se pudo conectar");
     }
@@ -542,7 +656,7 @@ export default function CatanApp() {
                 {savedGame.state.players.map(p => p.name).join(", ")}
               </p>
               <p className="text-slate-400 text-xs mb-3">
-                Turno {savedGame.state.turn} · Modo {savedGame.state.gameMode === "simple" ? "Simple" : "Completo"}
+                {savedGame.state.started ? `Turno ${savedGame.state.turn}` : "Sala en preparación"} · Modo {savedGame.state.gameMode === "simple" ? "Simple" : "Completo"}
               </p>
               <div className="flex gap-2">
                 <button onClick={continueSavedGame}
@@ -635,10 +749,27 @@ export default function CatanApp() {
             </button>
           ))}
         </div>
-        <button onClick={initPlayers}
-          className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
-          Siguiente →
-        </button>
+        {online.isConfigured ? (
+          <div className="space-y-3">
+            <button onClick={createLobbyRoom} disabled={lobbyBusy}
+              className="w-full py-3 bg-blue-500 hover:bg-blue-400 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-blue-500/20">
+              {lobbyBusy ? "Creando sala..." : "🌐 Crear sala online"}
+            </button>
+            <p className="text-slate-500 text-xs">
+              Se genera un código para compartir. Cada jugador se une desde su celular,
+              pone su nombre y carga sus poblados iniciales.
+            </p>
+            <button onClick={initPlayers}
+              className="w-full py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition-all">
+              📱 Cargar todo en este celular
+            </button>
+          </div>
+        ) : (
+          <button onClick={initPlayers}
+            className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
+            Siguiente →
+          </button>
+        )}
         <button onClick={() => setPhase("mode")}
           className="w-full mt-3 py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
           ← Cambiar modo
@@ -824,6 +955,159 @@ export default function CatanApp() {
               ))}
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════
+  //  RENDER: LOBBY ONLINE
+  //  El host creó la sala; cada jugador reclama su asiento, pone su nombre
+  //  y carga sus poblados iniciales desde su celular.
+  // ═══════════════════════════════════════════════
+  if (phase === "lobby" && game.inLobby && players.length > 0) {
+    const isHost = Boolean(online.room?.isHost);
+    const canEditAny = isHost || myIdx === null;
+    const seat = editingSeat ?? myIdx;
+    const missing = players.filter(p => p.productions.length === 0);
+    return (
+      <div className="catan-app p-4">
+        <style>{STYLE_CSS}</style>
+        {notif && (
+          <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:40,background:"#1e293b",border:"1px solid rgba(212,168,83,.5)",color:"#f0e6d3",padding:"12px 24px",borderRadius:16,boxShadow:"0 8px 32px rgba(0,0,0,.5)",fontSize:15,fontWeight:700,maxWidth:400,textAlign:"center",fontFamily:"'Nunito',system-ui,sans-serif"}}>
+            {notif}
+          </div>
+        )}
+        <div className="max-w-lg mx-auto space-y-4" style={{position:"relative",zIndex:1}}>
+
+          {/* Código de sala */}
+          <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30 text-center">
+            <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">🌐 Sala — código para unirse</p>
+            <p className="text-4xl font-black text-blue-300 tracking-[.3em] mb-1">{online.room?.code || "—"}</p>
+            <p className={`text-xs font-semibold mb-3 ${online.connected ? "text-emerald-400" : "text-red-400"}`}>
+              {online.connected ? "● Conectado" : "● Sin conexión"}
+            </p>
+            <button onClick={shareRoomCode}
+              className="w-full py-2.5 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl transition-all">
+              📤 Compartir código
+            </button>
+            <p className="text-slate-500 text-xs mt-2">Modo {game.gameMode === "simple" ? "Simple" : "Completo"} · {players.length} jugadores</p>
+          </div>
+
+          {/* Asientos */}
+          <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
+            <h2 className="text-lg font-bold text-amber-400 mb-1">Jugadores</h2>
+            <p className="text-slate-400 text-xs mb-4">Cada uno toca “¡Soy yo!” en su jugador, pone su nombre y carga sus 2 poblados iniciales. El orden de la lista es el orden de turnos.</p>
+            <div className="space-y-2">
+              {players.map((p, i) => {
+                const owner = online.members.find(m => m.player_index === i);
+                const isMine = myIdx === i;
+                const taken = owner && owner.user_id !== online.userId;
+                return (
+                  <div key={i} className={`flex items-center gap-3 p-2.5 rounded-xl ${isMine ? "bg-blue-500/15 ring-1 ring-blue-400" : "bg-slate-800/60"}`}>
+                    <span className="w-5 h-5 rounded-full flex-shrink-0" style={{backgroundColor: COLORS[p.ci].h}} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white font-semibold text-sm truncate">
+                        {p.name} {isMine && <span className="text-blue-300 text-xs">(vos)</span>}
+                      </div>
+                      <div className={`text-xs ${p.productions.length > 0 ? "text-emerald-400" : "text-slate-500"}`}>
+                        {p.productions.length > 0 ? "✓ poblados listos" : "sin poblados"}{taken ? " · conectado" : ""}
+                      </div>
+                    </div>
+                    {!taken && !isMine && (
+                      <button onClick={() => { online.claimPlayer(i, p.name); setEditingSeat(null); }}
+                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold rounded-lg transition-all">
+                        ¡Soy yo!
+                      </button>
+                    )}
+                    {isMine && (
+                      <button onClick={() => online.claimPlayer(null, null)}
+                        className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-400 text-xs rounded-lg">
+                        liberar
+                      </button>
+                    )}
+                    {canEditAny && seat !== i && (
+                      <button onClick={() => setEditingSeat(i)} title="Editar este jugador"
+                        className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded-lg">
+                        ✏️
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Editor del asiento (el propio, o cualquiera para host/mesa) */}
+          {seat !== null && players[seat] ? (
+            <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
+              <h2 className="text-lg font-bold text-amber-400 mb-3">{seat === myIdx ? "Tu jugador" : `Editando a ${players[seat].name}`}</h2>
+              <label className="text-slate-400 text-xs">Nombre</label>
+              <input value={seatName} onChange={e => setSeatName(e.target.value)} onBlur={() => saveSeatName(seat)}
+                placeholder="Nombre"
+                className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-white focus:border-amber-500 focus:outline-none mt-1 mb-3" />
+              <label className="text-slate-400 text-xs">Color</label>
+              <div className="flex gap-2 mt-1 mb-4">
+                {COLORS.map((c, ci) => {
+                  const used = players.some((pl, j) => j !== seat && pl.ci === ci);
+                  return (
+                    <button key={ci} disabled={used} onClick={() => setSeatColor(seat, ci)} title={c.n}
+                      style={{width:30,height:30,borderRadius:"50%",backgroundColor:c.h,border: players[seat].ci === ci ? "2px solid #f0d48a" : "2px solid transparent",opacity: used ? 0.25 : 1,cursor: used ? "not-allowed" : "pointer",transition:"all .15s"}} />
+                  );
+                })}
+              </div>
+              {[0, 1].map(si => (
+                <div key={si} className="mb-4 bg-slate-800/50 rounded-2xl p-3">
+                  <h3 className="text-slate-300 font-semibold text-sm mb-2">🏠 Poblado {si + 1} — hexágonos adyacentes</h3>
+                  {(lobbySett[si]?.hexes || []).map((hex, hi) => (
+                    <div key={hi} className="flex items-center gap-2 mb-2">
+                      <select value={hex.num} onChange={e => updateLobbyHex(si, hi, "num", e.target.value)}
+                        className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
+                        <option value="">Nro</option>
+                        {NUMS.map(n => <option key={n} value={n}>{n} {dotStr(n)}</option>)}
+                      </select>
+                      <select value={hex.res} onChange={e => updateLobbyHex(si, hi, "res", e.target.value)}
+                        className="flex-1 bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
+                        <option value="">Recurso</option>
+                        {RES.map(r => <option key={r.id} value={r.id}>{r.e} {r.n}</option>)}
+                      </select>
+                      {(lobbySett[si]?.hexes.length || 0) > 1 && (
+                        <button onClick={() => removeLobbyHex(si, hi)} className="text-red-400 hover:text-red-300 px-2">✕</button>
+                      )}
+                    </div>
+                  ))}
+                  {(lobbySett[si]?.hexes.length || 0) < 3 && (
+                    <button onClick={() => addLobbyHex(si)} className="text-xs text-amber-400 hover:text-amber-300">+ Agregar hexágono</button>
+                  )}
+                </div>
+              ))}
+              <button onClick={() => saveSeatSettlements(seat)}
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-white font-bold rounded-xl transition-all">
+                💾 Guardar poblados
+              </button>
+            </div>
+          ) : (
+            <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30 text-center">
+              <p className="text-slate-300 text-sm">👆 Tocá <b>“¡Soy yo!”</b> en tu jugador para poner tu nombre y cargar tus poblados.</p>
+            </div>
+          )}
+
+          {/* Comenzar (host o mesa) */}
+          {(isHost || myIdx === null) && (
+            <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
+              <button onClick={() => dispatch({ type: "BEGIN_GAME" })}
+                className="w-full py-3 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-lg transition-all">
+                🎲 ¡Comenzar partida!
+              </button>
+              {missing.length > 0 && (
+                <p className="text-amber-300/80 text-xs mt-2 text-center">Faltan poblados de: {missing.map(p => p.name).join(", ")}</p>
+              )}
+            </div>
+          )}
+
+          <button onClick={newGame} className="w-full py-2 text-slate-500 hover:text-slate-300 text-sm font-semibold">
+            ← Salir de la sala
+          </button>
         </div>
       </div>
     );
