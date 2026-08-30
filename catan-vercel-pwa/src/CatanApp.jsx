@@ -12,6 +12,20 @@ import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog"
 import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
 import { useWakeLock, vibrate } from "./useWakeLock";
 
+// Acciones de juego que solo despacha el jugador de turno (o un celular "mesa"
+// sin jugador reclamado). Las de corrección también las puede hacer el host.
+const TURN_ACTIONS = new Set([
+  "ROLL", "DISCARD", "PLACE_ROBBER", "STEAL", "BUILD_ROAD", "ADD_SETTLEMENT",
+  "UPGRADE_CITY", "BUY_DEV", "PLAY_DEV", "MONOPOLY", "YEAR_OF_PLENTY",
+  "TRADE_BANK", "TRADE_PLAYER", "ADD_PORT", "REMOVE_PORT", "END_TURN",
+]);
+const FIX_ACTIONS = new Set(["MANUAL_ADJUST", "ADD_FREE_SETTLEMENT", "MOVE_PLAYER", "UNDO"]);
+
+// Preferencia local: quien tira dados físicos ve el teclado 2-12 directo.
+const PREF_MANUAL_KEY = "catan.dadosManuales.v1";
+const loadPrefManual = () => { try { return localStorage.getItem(PREF_MANUAL_KEY) === "1"; } catch { return false; } };
+const savePrefManual = (v) => { try { localStorage.setItem(PREF_MANUAL_KEY, v ? "1" : "0"); } catch { /* sin storage */ } };
+
 // ═══════════════════════════════════════════════
 //  APP PRINCIPAL
 //  El estado del juego vive en useGameLog (reducer + log de acciones).
@@ -28,13 +42,35 @@ export default function CatanApp() {
     onResync: replaceActions,
   });
 
+  const [notif, setNotif] = useState(null);
+  const notifTimer = useRef(null);
+  const showNotif = useCallback((msg, dur = 3000) => {
+    setNotif(msg);
+    if (notifTimer.current) clearTimeout(notifTimer.current);
+    notifTimer.current = setTimeout(() => setNotif(null), dur);
+  }, []);
+
   // Toda acción local pasa por acá: se aplica al instante y, si hay sala,
   // se publica (con cola offline si no hay red).
+  // Gating por turno: en una sala, un celular con jugador reclamado solo
+  // actúa en su turno; correcciones (ajustes, deshacer) también las hace el
+  // host. Un celular sin jugador reclamado controla la mesa completa.
   const dispatch = useCallback((action) => {
+    if (online.room && online.myPlayerIndex !== null && online.myPlayerIndex !== game.cp) {
+      if (FIX_ACTIONS.has(action.type)) {
+        if (!online.room.isHost) {
+          showNotif("Solo el anfitrión puede corregir fuera de su turno");
+          return null;
+        }
+      } else if (TURN_ACTIONS.has(action.type)) {
+        showNotif(`⏳ Es el turno de ${game.players[game.cp]?.name || "otro jugador"}`);
+        return null;
+      }
+    }
     const stamped = dispatchAction(action);
     if (online.room) online.pushAction(stamped);
     return stamped;
-  }, [dispatchAction, online.room, online.pushAction]);
+  }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.cp, game.players, showNotif]);
 
   // Partida guardada pendiente de retomar (si existe y no terminó)
   const [savedGame, setSavedGame] = useState(() => {
@@ -52,33 +88,36 @@ export default function CatanApp() {
   const [setupPlayers, setSetupPlayers] = useState([]);
   const [setupIdx, setSetupIdx] = useState(0);
   const [setupData, setSetupData] = useState({});
-  const [notif, setNotif] = useState(null);
   const [tab, setTab] = useState("dados");
   const [rolling, setRolling] = useState(false);
-  const [manualPickerOpen, setManualPickerOpen] = useState(false);
+  const [manualPickerOpen, setManualPickerOpen] = useState(() => loadPrefManual());
   const [modal, setModal] = useState(null);
   const [winner, setWinner] = useState(null);
   // Modal-level state (lifted to avoid hooks-in-IIFE)
-  const [joinCode, setJoinCode] = useState("");
+  // El código de sala se puede precargar por URL (?sala=CODIGO) para unirse con un tap.
+  const [joinCode, setJoinCode] = useState(() => {
+    try { return (new URLSearchParams(window.location.search).get("sala") || "").toUpperCase(); } catch { return ""; }
+  });
   const [joinBusy, setJoinBusy] = useState(false);
   const [modalDiscards, setModalDiscards] = useState(eHand());
   const [modalHexes, setModalHexes] = useState([{ num: "", res: "" }]);
   const [tradeOther, setTradeOther] = useState(0);
   const [tradeGive, setTradeGive] = useState(eHand());
   const [tradeReceive, setTradeReceive] = useState(eHand());
-  const notifTimer = useRef(null);
 
   const { players, cp, turnPhase, dice, deck, robber, turn, diceHistory, lastDistribution, log } = game;
   const mode = GAME_MODES[game.started ? game.gameMode : gameMode];
 
+  // ── CONTROL POR TURNO (sala online) ──
+  // Sin sala, o sin jugador reclamado (celular "mesa"): control total.
+  const myIdx = online.myPlayerIndex;
+  const inRoomAsPlayer = Boolean(online.room) && myIdx !== null;
+  const isMyTurn = inRoomAsPlayer && myIdx === cp;
+  const canAct = !inRoomAsPlayer || isMyTurn;
+  const canFix = canAct || Boolean(online.room?.isHost);
+
   // La pantalla no se apaga durante la partida (se libera al terminar).
   useWakeLock(phase === "game" && game.started && winner === null);
-
-  const showNotif = useCallback((msg, dur = 3000) => {
-    setNotif(msg);
-    if (notifTimer.current) clearTimeout(notifTimer.current);
-    notifTimer.current = setTimeout(() => setNotif(null), dur);
-  }, []);
 
   // ── SCORES (derivados del estado del juego) ──
   const scores = useMemo(() => computeScores(players), [players]);
@@ -105,6 +144,25 @@ export default function CatanApp() {
     const w = finalScores.findIndex(s => s >= WINNING_SCORE);
     if (w >= 0 && winner === null) setWinner(w);
   }, [finalScores, winner]);
+
+  // ── AVISO DE TURNO ──
+  // En sala online con jugador reclamado: vibración + notificación cuando
+  // arranca tu turno (una sola vez por turno).
+  const lastTurnNotifRef = useRef(null);
+  useEffect(() => {
+    if (!game.started || !isMyTurn || turnPhase !== "preroll") return;
+    const key = `${turn}:${cp}`;
+    if (lastTurnNotifRef.current === key) return;
+    lastTurnNotifRef.current = key;
+    vibrate([90, 70, 90]);
+    showNotif(`🎲 ¡Es tu turno, ${players[cp]?.name}!`, 4000);
+  }, [game.started, isMyTurn, turnPhase, turn, cp, players, showNotif]);
+
+  // Al cambiar el turno, el selector de dados vuelve a la preferencia guardada
+  // (quien usa dados físicos ve el teclado 2-12 directo).
+  useEffect(() => {
+    if (game.started) setManualPickerOpen(loadPrefManual());
+  }, [game.started, cp, turn]);
 
   // ── CONTINUAR PARTIDA ──
   const continueSavedGame = () => {
@@ -213,6 +271,7 @@ export default function CatanApp() {
   };
 
   const doRollDice = () => {
+    savePrefManual(false);
     setRolling(true);
     const d1 = rollDie(), d2 = rollDie();
     setTimeout(() => {
@@ -222,6 +281,7 @@ export default function CatanApp() {
   };
 
   const doManualRoll = (sum) => {
+    savePrefManual(true);
     // pick a random valid pair (d1, d2) in [1..6] that sums to `sum`, for display
     const min = Math.max(1, sum - 6);
     const max = Math.min(6, sum - 1);
@@ -264,6 +324,10 @@ export default function CatanApp() {
 
   // Construir con confirmación + error claro
   const requestBuild = (type) => {
+    if (!canAct) {
+      showNotif(`⏳ Es el turno de ${players[cp]?.name}`);
+      return;
+    }
     if (mode.enforceCosts) {
       if (turnPhase !== "rolled") {
         showNotif("Primero tirá los dados (y esperá a que se distribuyan recursos)");
@@ -366,7 +430,7 @@ export default function CatanApp() {
 
   const endTurn = () => {
     dispatch({ type: "END_TURN" });
-    setManualPickerOpen(false);
+    setManualPickerOpen(loadPrefManual());
     setTab("dados");
   };
 
@@ -411,6 +475,17 @@ export default function CatanApp() {
     }
   };
 
+  // Comparte el código de sala con un link que lo precarga (?sala=CODIGO).
+  const shareRoomCode = async () => {
+    if (!online.room) return;
+    const url = `${window.location.origin}${window.location.pathname}?sala=${online.room.code}`;
+    const text = `🏝️ Unite a la partida de Catán con el código ${online.room.code}\n${url}`;
+    try {
+      if (navigator.share) await navigator.share({ text });
+      else { await navigator.clipboard.writeText(text); showNotif("📋 Link copiado, pasáselo a tus amigos"); }
+    } catch { /* usuario canceló el share */ }
+  };
+
   const joinOnlineRoom = async (code) => {
     if (!code.trim()) return;
     setJoinBusy(true);
@@ -440,7 +515,7 @@ export default function CatanApp() {
   const doUndo = () => {
     // El deshacer es una acción más en el log (se sincroniza online).
     dispatch({ type: "UNDO" });
-    setManualPickerOpen(false);
+    setManualPickerOpen(loadPrefManual());
     setModal(null);
     showNotif("↩️ Última acción deshecha");
   };
@@ -830,14 +905,14 @@ export default function CatanApp() {
                 )}
               </button>
             )}
-            {canUndo && (
+            {canUndo && canFix && (
               <button onClick={requestUndo}
                 className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-base transition-all"
                 title="Deshacer última acción">
                 ↩️
               </button>
             )}
-            {turnPhase === "rolled" && (
+            {turnPhase === "rolled" && canAct && (
               <button onClick={endTurn}
                 className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-lg text-sm transition-all">
                 Fin turno →
@@ -883,6 +958,16 @@ export default function CatanApp() {
           {tab === "dados" && (
             <div className="space-y-6">
               <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:16,width:"100%"}}>
+                {!canAct && (
+                  <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"14px 18px",textAlign:"center"}}>
+                    <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:16,fontWeight:700,letterSpacing:1,marginBottom:4}}>
+                      ⏳ Turno de {cur.name}
+                    </div>
+                    <div style={{color:"#a89278",fontSize:13,fontWeight:600,fontFamily:"'Nunito',system-ui,sans-serif"}}>
+                      {turnPhase === "preroll" ? "Esperando la tirada de dados…" : "Está construyendo o comerciando…"} Tu celular se activa en tu turno.
+                    </div>
+                  </div>
+                )}
                 <div className="flex gap-4">
                   {dice[0] > 0 ? (
                     <>
@@ -901,7 +986,7 @@ export default function CatanApp() {
                   )}
                 </div>
                 {diceSum > 0 && <div style={{fontSize:48,fontWeight:900,color:"#f0d48a",textShadow:"0 2px 18px rgba(212,168,83,.4)",fontFamily:"'Cinzel',serif",textAlign:"center"}}>{diceSum}</div>}
-                {turnPhase === "preroll" && !mode.manualDiceOnly && !manualPickerOpen && (
+                {canAct && turnPhase === "preroll" && !mode.manualDiceOnly && !manualPickerOpen && (
                   <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
                     <button onClick={doRollDice}
                       style={{background:"linear-gradient(135deg,#d4a853,#b8902e)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:"1.15rem",padding:"16px 48px",borderRadius:12,border:"1px solid rgba(240,212,138,.55)",boxShadow:"0 14px 34px rgba(212,168,83,.35)",cursor:"pointer",textShadow:"0 1px 3px rgba(0,0,0,.4)",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8,margin:"0 auto"}}>
@@ -913,7 +998,7 @@ export default function CatanApp() {
                     </button>
                   </div>
                 )}
-                {turnPhase === "preroll" && (mode.manualDiceOnly || manualPickerOpen) && (
+                {canAct && turnPhase === "preroll" && (mode.manualDiceOnly || manualPickerOpen) && (
                   <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)"}}>
                     <div style={{fontFamily:"'Cinzel',serif",color:"#d4a853",fontSize:15,fontWeight:700,marginBottom:12,textAlign:"center",letterSpacing:1}}>✍️ Ingresar número de dados</div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(6, 1fr)",gap:8,marginBottom:12}}>
@@ -933,7 +1018,7 @@ export default function CatanApp() {
                   </div>
                 )}
                 {turnPhase === "rolled" && diceSum > 0 && diceSum !== 7 && (
-                  <p style={{color:"#f0e6d3",fontWeight:700,fontSize:15,letterSpacing:".2px",textAlign:"center",margin:0}}>{(lastDistribution?.num === diceSum && lastDistribution?.lines?.length > 0) ? "Recursos distribuidos. Podés construir, comerciar o terminar turno." : "Ningún jugador recibe recursos."}</p>
+                  <p style={{color:"#f0e6d3",fontWeight:700,fontSize:15,letterSpacing:".2px",textAlign:"center",margin:0}}>{(lastDistribution?.num === diceSum && lastDistribution?.lines?.length > 0) ? (canAct ? "Recursos distribuidos. Podés construir, comerciar o terminar turno." : "Recursos distribuidos.") : "Ningún jugador recibe recursos."}</p>
                 )}
                 {turnPhase === "rolled" && diceSum > 0 && diceSum !== 7 && lastDistribution?.num === diceSum && (
                   <div style={{width:"100%",maxWidth:480,margin:"0 auto",background:"rgba(44,24,16,.85)",border:"1px solid rgba(212,168,83,.25)",borderRadius:16,padding:"16px 20px",backdropFilter:"blur(10px)",textAlign:"center"}}>
@@ -952,7 +1037,7 @@ export default function CatanApp() {
                   </div>
                 )}
 
-                {turnPhase === "rolled" && diceSum > 0 && (
+                {canAct && turnPhase === "rolled" && diceSum > 0 && (
                   <div style={{width:"100%",maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"row",gap:12}}>
                     <button
                       style={{flex:1,padding:"14px 16px",borderRadius:12,background:"rgba(100,116,139,.35)",border:"2px solid rgba(148,163,184,.5)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:16,cursor:"pointer",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
@@ -967,6 +1052,13 @@ export default function CatanApp() {
                       🤝 Comerciar
                     </button>
                   </div>
+                )}
+
+                {canAct && turnPhase === "rolled" && (
+                  <button onClick={endTurn}
+                    style={{width:"100%",maxWidth:480,margin:"0 auto",padding:"16px",borderRadius:12,background:"linear-gradient(135deg,#22c55e,#15803d)",border:"1px solid rgba(134,239,172,.55)",color:"#fff",fontFamily:"'Nunito',system-ui,sans-serif",fontWeight:800,fontSize:17,cursor:"pointer",boxShadow:"0 10px 26px rgba(34,197,94,.28)",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                    ✅ Terminar {isMyTurn ? "mi turno" : "turno"}
+                  </button>
                 )}
 
               </div>
@@ -1011,13 +1103,11 @@ export default function CatanApp() {
 
               {/* Current player hand (o la mano reclamada en una sala online) */}
               {(() => {
-                const handOwner = online.myPlayerIndex !== null && players[online.myPlayerIndex]
-                  ? players[online.myPlayerIndex] : cur;
-                const isMyTurn = online.myPlayerIndex !== null && online.myPlayerIndex === cp;
+                const handOwner = inRoomAsPlayer && players[myIdx] ? players[myIdx] : cur;
                 return (
                   <div className={`bg-slate-800 rounded-2xl p-4 ${isMyTurn ? "ring-2 ring-amber-400" : ""}`}>
                     <h3 className="text-slate-300 font-semibold mb-3">
-                      {online.myPlayerIndex !== null ? `Tu mano — ${handOwner.name}` : "Tu mano"} ({totalC(handOwner.hand)} cartas)
+                      {inRoomAsPlayer ? `Tu mano — ${handOwner.name}` : "Tu mano"} ({totalC(handOwner.hand)} cartas)
                       {isMyTurn && <span className="ml-2 text-amber-400 text-xs font-bold">¡TU TURNO!</span>}
                     </h3>
                     <div className="flex flex-wrap gap-2">
@@ -1038,10 +1128,13 @@ export default function CatanApp() {
           {tab === "construir" && (
             <div className="space-y-4">
               <h3 className="text-slate-300 font-semibold">Construcciones</h3>
+              {!canAct && (
+                <p className="text-slate-400 text-sm">⏳ Es el turno de <span className="font-bold text-amber-300">{cur.name}</span>. Solo quien tiene el turno construye.</p>
+              )}
               {Object.entries(COSTS)
                 .filter(([type]) => mode.showDevCards || type !== "desarrollo")
                 .map(([type, cost]) => {
-                const canBuild = mode.enforceCosts ? (afford(cur.hand, cost) && turnPhase === "rolled") : true;
+                const canBuild = canAct && (mode.enforceCosts ? (afford(cur.hand, cost) && turnPhase === "rolled") : true);
                 return (
                   <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
                     <div>
@@ -1063,7 +1156,7 @@ export default function CatanApp() {
               })}
 
               <div className="bg-slate-800/50 rounded-2xl p-4 mt-6">
-                <h3 className="text-slate-300 font-semibold mb-3">Tus propiedades</h3>
+                <h3 className="text-slate-300 font-semibold mb-3">{inRoomAsPlayer && !isMyTurn ? `Propiedades de ${cur.name}` : "Tus propiedades"}</h3>
                 {getSettlementGroups(cur).length === 0 ? (
                   <p className="text-slate-500 text-sm">Sin propiedades registradas</p>
                 ) : (
@@ -1087,6 +1180,9 @@ export default function CatanApp() {
           {/* ── COMERCIAR ── */}
           {tab === "comerciar" && (
             <div className="space-y-6">
+              {!canAct && (
+                <p className="text-slate-400 text-sm">⏳ Es el turno de <span className="font-bold text-amber-300">{cur.name}</span>. Solo quien tiene el turno comercia.</p>
+              )}
               {/* Bank trade */}
               <div className="bg-slate-800 rounded-2xl p-4">
                 <h3 className="text-slate-300 font-semibold mb-3">Comercio con el banco</h3>
@@ -1104,8 +1200,8 @@ export default function CatanApp() {
                         <div className="flex gap-2 flex-wrap">
                           {RES.filter(r => r.id !== give.id).map(rec => (
                             <button key={rec.id} onClick={() => doTrade(give.id, rec.id, ratio)}
-                              disabled={turnPhase !== "rolled"}
-                              className={`${rec.bg} ${rec.tx} px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:opacity-80 active:scale-95`}>
+                              disabled={turnPhase !== "rolled" || !canAct}
+                              className={`${rec.bg} ${rec.tx} px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:opacity-80 active:scale-95 disabled:opacity-40`}>
                               {rec.e} {rec.n}
                             </button>
                           ))}
@@ -1122,8 +1218,8 @@ export default function CatanApp() {
               {/* Player trade */}
               <div className="bg-slate-800 rounded-2xl p-4">
                 <h3 className="text-slate-300 font-semibold mb-3">Comercio entre jugadores</h3>
-                <button onClick={() => { setTradeOther(cp === 0 ? 1 : 0); setTradeGive(eHand()); setTradeReceive(eHand()); setModal({ type: "playerTrade" }); }} disabled={turnPhase !== "rolled"}
-                  className={`w-full py-3 rounded-xl font-bold transition-all ${turnPhase === "rolled" ? "bg-blue-500 hover:bg-blue-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
+                <button onClick={() => { setTradeOther(cp === 0 ? 1 : 0); setTradeGive(eHand()); setTradeReceive(eHand()); setModal({ type: "playerTrade" }); }} disabled={turnPhase !== "rolled" || !canAct}
+                  className={`w-full py-3 rounded-xl font-bold transition-all ${turnPhase === "rolled" && canAct ? "bg-blue-500 hover:bg-blue-400 text-white" : "bg-slate-700 text-slate-500 cursor-not-allowed"}`}>
                   🤝 Proponer intercambio
                 </button>
               </div>
@@ -1135,55 +1231,68 @@ export default function CatanApp() {
                   {cur.ports.map(port => (
                     <span key={port} className="bg-blue-800 text-blue-200 px-2 py-1 rounded-lg text-sm flex items-center gap-1">
                       {port === "3:1" ? "⚓ 3:1" : `${RM[port].e} 2:1`}
-                      <button onClick={() => removePort(port)} className="text-blue-400 hover:text-white ml-1">✕</button>
+                      {canAct && <button onClick={() => removePort(port)} className="text-blue-400 hover:text-white ml-1">✕</button>}
                     </span>
                   ))}
                   {cur.ports.length === 0 && <span className="text-slate-500 text-sm">Sin puertos</span>}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {!cur.ports.includes("3:1") && (
-                    <button onClick={() => addPort("3:1")} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ ⚓ 3:1</button>
-                  )}
-                  {RES.filter(r => !cur.ports.includes(r.id)).map(r => (
-                    <button key={r.id} onClick={() => addPort(r.id)} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ {r.e} 2:1</button>
-                  ))}
-                </div>
+                {canAct && (
+                  <div className="flex flex-wrap gap-2">
+                    {!cur.ports.includes("3:1") && (
+                      <button onClick={() => addPort("3:1")} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ ⚓ 3:1</button>
+                    )}
+                    {RES.filter(r => !cur.ports.includes(r.id)).map(r => (
+                      <button key={r.id} onClick={() => addPort(r.id)} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg text-sm">+ {r.e} 2:1</button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           {/* ── CARTAS DE DESARROLLO ── */}
-          {tab === "cartas" && (
-            <div className="space-y-4">
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <h3 className="text-slate-300 font-semibold mb-2">Tus cartas ({cur.devCards.length})</h3>
-                {cur.devCards.length === 0 ? (
-                  <p className="text-slate-500 text-sm">No tenés cartas de desarrollo</p>
-                ) : (
-                  <div className="space-y-2">
-                    {cur.devCards.map((c, i) => (
-                      <div key={i} className="bg-slate-700/50 rounded-xl p-3 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xl">{DC[c].e}</span>
-                          <div>
-                            <div className="text-white text-sm font-medium">{DC[c].n}</div>
-                            <div className="text-slate-400 text-xs">{DC[c].d}</div>
+          {/* En sala online se muestran las cartas del jugador reclamado (son
+              secretas); se juegan solo en el turno propio. */}
+          {tab === "cartas" && (() => {
+            const cardOwner = inRoomAsPlayer && players[myIdx] ? players[myIdx] : cur;
+            const canPlayNow = canAct && cardOwner === cur && turnPhase === "rolled";
+            return (
+              <div className="space-y-4">
+                <div className="bg-slate-800 rounded-2xl p-4">
+                  <h3 className="text-slate-300 font-semibold mb-2">
+                    {inRoomAsPlayer ? `Tus cartas — ${cardOwner.name}` : "Tus cartas"} ({cardOwner.devCards.length})
+                  </h3>
+                  {cardOwner.devCards.length === 0 ? (
+                    <p className="text-slate-500 text-sm">No tenés cartas de desarrollo</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {cardOwner.devCards.map((c, i) => (
+                        <div key={i} className="bg-slate-700/50 rounded-xl p-3 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xl">{DC[c].e}</span>
+                            <div>
+                              <div className="text-white text-sm font-medium">{DC[c].n}</div>
+                              <div className="text-slate-400 text-xs">{DC[c].d}</div>
+                            </div>
                           </div>
+                          {c !== "victoria" && canPlayNow && (
+                            <button onClick={() => playDevCard(c, i)}
+                              className="px-3 py-1.5 bg-purple-500 hover:bg-purple-400 text-white rounded-lg text-sm font-medium">
+                              Jugar
+                            </button>
+                          )}
                         </div>
-                        {c !== "victoria" && turnPhase === "rolled" && (
-                          <button onClick={() => playDevCard(c, i)}
-                            className="px-3 py-1.5 bg-purple-500 hover:bg-purple-400 text-white rounded-lg text-sm font-medium">
-                            Jugar
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                  {inRoomAsPlayer && !isMyTurn && cardOwner.devCards.some(c => c !== "victoria") && (
+                    <p className="text-slate-500 text-xs mt-2">⏳ Las cartas se juegan en tu turno, después de tirar los dados.</p>
+                  )}
+                </div>
+                <p className="text-slate-500 text-sm text-center">Quedan {deck.length} cartas en el mazo</p>
               </div>
-              <p className="text-slate-500 text-sm text-center">Quedan {deck.length} cartas en el mazo</p>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ── JUGADORES ── */}
           {tab === "jugadores" && (
@@ -1198,39 +1307,45 @@ export default function CatanApp() {
                       {largestArmy === i && <span className="text-xs bg-purple-900 text-purple-300 px-2 py-0.5 rounded-full">⚔️ Ejército</span>}
                       {longestRoad === i && <span className="text-xs bg-amber-900 text-amber-300 px-2 py-0.5 rounded-full">🛤️ Camino</span>}
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <button onClick={() => addFreeSettlement(i)}
-                        className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg">
-                        + Poblado
-                      </button>
-                      <button
-                        onClick={() => movePlayer(i, -1)}
-                        disabled={i === 0}
-                        className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold ${i === 0 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
-                        title="Subir en el orden de turnos">
-                        ▲
-                      </button>
-                      <button
-                        onClick={() => movePlayer(i, 1)}
-                        disabled={i === players.length - 1}
-                        className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold ${i === players.length - 1 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
-                        title="Bajar en el orden de turnos">
-                        ▼
-                      </button>
-                    </div>
+                    {canFix && (
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => addFreeSettlement(i)}
+                          className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg">
+                          + Poblado
+                        </button>
+                        <button
+                          onClick={() => movePlayer(i, -1)}
+                          disabled={i === 0}
+                          className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold ${i === 0 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
+                          title="Subir en el orden de turnos">
+                          ▲
+                        </button>
+                        <button
+                          onClick={() => movePlayer(i, 1)}
+                          disabled={i === players.length - 1}
+                          className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold ${i === players.length - 1 ? "bg-slate-800 text-slate-600 cursor-not-allowed" : "bg-slate-700 text-amber-300 hover:bg-slate-600"}`}
+                          title="Bajar en el orden de turnos">
+                          ▼
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Resources */}
                   <div className="flex flex-wrap gap-1.5 mb-3">
                     {RES.map(r => (
                       <div key={r.id} className="flex items-center gap-1">
-                        <button onClick={() => manualAdjust(i, r.id, -1)}
-                          className="w-5 h-5 bg-slate-700 hover:bg-red-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">−</button>
+                        {canFix && (
+                          <button onClick={() => manualAdjust(i, r.id, -1)}
+                            className="w-5 h-5 bg-slate-700 hover:bg-red-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">−</button>
+                        )}
                         <div className={`${r.bg} ${r.tx} px-2 py-0.5 rounded text-xs font-bold min-w-8 text-center`}>
                           {r.e}{p.hand[r.id]}
                         </div>
-                        <button onClick={() => manualAdjust(i, r.id, 1)}
-                          className="w-5 h-5 bg-slate-700 hover:bg-green-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">+</button>
+                        {canFix && (
+                          <button onClick={() => manualAdjust(i, r.id, 1)}
+                            className="w-5 h-5 bg-slate-700 hover:bg-green-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">+</button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1289,7 +1404,8 @@ export default function CatanApp() {
                   <div>
                     <p className="text-slate-300 text-sm mb-4">
                       Creá una sala para que los demás sigan la partida desde su celular:
-                      van a ver el estado en vivo y cada uno puede controlar su jugador.
+                      cada uno reclama su jugador, ve su mano y juega su turno
+                      (construir, comerciar, terminar turno).
                     </p>
                     <button onClick={createOnlineRoom}
                       className="w-full py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl mb-2">
@@ -1306,6 +1422,11 @@ export default function CatanApp() {
                         {online.pendingCount > 0 && ` · ${online.pendingCount} acción(es) por sincronizar`}
                       </p>
                     </div>
+
+                    <button onClick={shareRoomCode}
+                      className="w-full py-2.5 mb-4 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/40 text-blue-200 font-bold rounded-xl text-sm transition-all">
+                      📤 Compartir código
+                    </button>
 
                     <p className="text-slate-300 text-sm font-semibold mb-2">¿Qué jugador sos?</p>
                     <div className="space-y-2 mb-4">
@@ -1326,6 +1447,11 @@ export default function CatanApp() {
                         );
                       })}
                     </div>
+
+                    <p className="text-slate-500 text-xs mb-4">
+                      Con jugador reclamado, tu celular juega solo en tu turno. Un celular sin
+                      jugador reclamado controla la mesa completa (útil si a alguien se le apaga el teléfono).
+                    </p>
 
                     <button onClick={() => { online.leaveRoom(); showNotif("Saliste de la sala (la partida sigue local)"); }}
                       className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-400 rounded-xl text-sm mb-2">
