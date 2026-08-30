@@ -2,9 +2,11 @@
 
 PWA para acompañar partidas de Catán: dados (aleatorios o manuales, ideal para tirar
 dados físicos y repartir desde la app), distribución de recursos, construcciones,
-cartas de desarrollo, puntaje, y multijugador online multidispositivo: cada celular
-reclama su jugador, ve su mano y juega su turno (construir, comerciar, terminar turno);
-el resto del tiempo sigue la partida en vivo.
+cartas de desarrollo, puntaje, y multijugador online multidispositivo: el host crea la
+sala apenas elige modo y cantidad, cada jugador se une con el código, carga su nombre y
+sus poblados iniciales desde su celular, y en el juego cada celular controla a su
+jugador en su turno (construir, comerciar, terminar turno); el resto del tiempo sigue
+la partida en vivo.
 
 ## Desarrollo
 

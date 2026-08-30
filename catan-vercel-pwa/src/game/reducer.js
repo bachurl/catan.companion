@@ -15,6 +15,7 @@ import { COSTS, RM, GAME_MODES, eHand, totalC, afford } from "./constants.js";
 
 export const initialGameState = {
   started: false,
+  inLobby: false, // sala online creada, esperando que cada jugador cargue sus datos
   gameMode: "full",
   players: [],
   cp: 0, // índice del jugador actual
@@ -66,6 +67,55 @@ export function gameReducer(state, action) {
   const mode = GAME_MODES[state.gameMode] || GAME_MODES.full;
 
   switch (action.type) {
+    // ── LOBBY ONLINE ──
+    // El host crea la sala apenas elige modo y cantidad; cada jugador carga
+    // su nombre/color y poblados iniciales desde su celular, y el host
+    // comienza la partida con BEGIN_GAME.
+    case "CREATE_LOBBY": {
+      // payload: { mode, playerCount, deck }
+      const players = Array.from({ length: action.playerCount }, (_, i) => ({
+        name: `Jugador ${i + 1}`, ci: i, productions: [], hand: eHand(),
+        devCards: [], knightsPlayed: 0, roadsBuilt: 0,
+        ports: [], devCardBought: [], devCardPlayed: false,
+      }));
+      return { ...initialGameState, inLobby: true, gameMode: action.mode, players, deck: action.deck };
+    }
+
+    case "SET_PLAYER_NAME": {
+      // payload: { player, name?, ci? }
+      const players = state.players.map((p, i) => i !== action.player ? p : ({
+        ...p,
+        name: action.name ?? p.name,
+        ci: action.ci ?? p.ci,
+      }));
+      return { ...state, players };
+    }
+
+    case "SET_INITIAL_SETTLEMENTS": {
+      // payload: { player, settlements: [{hexes:[{num,res}]}] }
+      // Reemplaza los poblados iniciales del jugador (editable hasta empezar).
+      if (state.started) return state;
+      let nextId = state.nextId;
+      const prods = [];
+      (action.settlements || []).forEach(sett => {
+        const r = buildProductions(sett.hexes, nextId);
+        prods.push(...r.prods);
+        nextId = r.nextId;
+      });
+      const players = state.players.map((p, i) => i !== action.player ? p : ({ ...p, productions: prods }));
+      return { ...state, players, nextId };
+    }
+
+    case "BEGIN_GAME": {
+      if (state.started || !state.inLobby) return state;
+      return {
+        ...state,
+        started: true,
+        inLobby: false,
+        log: pushLog(state.log, ts, `🎲 Empieza ${state.players[0]?.name || "Jugador 1"}. ¡A jugar!`),
+      };
+    }
+
     case "START_GAME": {
       // payload: { mode, players: [{name, ci}], settlements: {pi: [{hexes:[{num,res}]}]}, deck }
       let nextId = 1;

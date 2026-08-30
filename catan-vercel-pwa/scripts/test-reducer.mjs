@@ -133,6 +133,30 @@ actions.push({ type: "UNDO", ts });
 s = replayActions(actions);
 assert(s.players[0].knightsPlayed === 0, "segundo UNDO revierte el caballero jugado");
 
+console.log("LOBBY: CREATE_LOBBY → SET_PLAYER_NAME → SET_INITIAL_SETTLEMENTS → BEGIN_GAME:");
+const lobbyActions = [
+  { type: "CREATE_LOBBY", ts, mode: "full", playerCount: 3, deck },
+];
+let ls = replayActions(lobbyActions);
+assert(ls.inLobby === true && ls.started === false, "lobby creado, partida sin empezar");
+assert(ls.players.length === 3, "3 asientos con placeholders");
+lobbyActions.push({ type: "SET_PLAYER_NAME", ts, player: 1, name: "Caro", ci: 3 });
+lobbyActions.push({ type: "SET_INITIAL_SETTLEMENTS", ts, player: 1, settlements: [{ hexes: [{ num: "6", res: "trigo" }] }, { hexes: [{ num: "9", res: "madera" }] }] });
+ls = replayActions(lobbyActions);
+assert(ls.players[1].name === "Caro" && ls.players[1].ci === 3, "nombre y color seteados");
+assert(ls.players[1].productions.length === 2, "2 poblados cargados");
+lobbyActions.push({ type: "SET_INITIAL_SETTLEMENTS", ts, player: 1, settlements: [{ hexes: [{ num: "6", res: "trigo" }, { num: "10", res: "oveja" }] }] });
+ls = replayActions(lobbyActions);
+assert(ls.players[1].productions.length === 2 && new Set(ls.players[1].productions.map(p => p.gid)).size === 1, "re-guardar reemplaza (1 poblado con 2 hexes)");
+lobbyActions.push({ type: "BEGIN_GAME", ts });
+ls = replayActions(lobbyActions);
+assert(ls.started === true && ls.inLobby === false, "BEGIN_GAME arranca la partida");
+lobbyActions.push({ type: "ROLL", ts, d1: 3, d2: 3, manual: true });
+ls = replayActions(lobbyActions);
+assert(ls.players[1].hand.trigo === 1, "el 6 produce para Caro tras empezar");
+assert(replayActions([...lobbyActions, { type: "BEGIN_GAME", ts }]).started === true, "BEGIN_GAME repetido es inofensivo");
+assert(replayActions([...lobbyActions, { type: "SET_INITIAL_SETTLEMENTS", ts, player: 1, settlements: [] }]).players[1].productions.length === 2, "SET_INITIAL_SETTLEMENTS ignorado con partida empezada");
+
 console.log("Determinismo (replay dos veces = mismo estado):");
 const s1 = JSON.stringify(replayActions(actions));
 const s2 = JSON.stringify(replayActions(actions));
