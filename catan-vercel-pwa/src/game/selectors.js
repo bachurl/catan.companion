@@ -11,26 +11,31 @@ export const computeScores = (players) => players.map(p => {
   return sett + cit * 2 + p.devCards.filter(c => c === "victoria").length;
 });
 
-export const computeLargestArmy = (players) => {
+// Los títulos aceptan override manual (`titles`): la app no conoce el tablero,
+// así que el camino más largo real puede no coincidir con el conteo de caminos.
+// `null` en el override = cálculo automático.
+export const computeLargestArmy = (players, titles) => {
+  if (titles?.largestArmy != null) return titles.largestArmy;
   let best = -1, who = null;
   players.forEach((p, i) => { if (p.knightsPlayed >= 3 && p.knightsPlayed > best) { best = p.knightsPlayed; who = i; } });
   return who;
 };
 
-export const computeLongestRoad = (players) => {
+export const computeLongestRoad = (players, titles) => {
+  if (titles?.longestRoad != null) return titles.longestRoad;
   let best = -1, who = null;
   players.forEach((p, i) => { if (p.roadsBuilt >= 5 && p.roadsBuilt > best) { best = p.roadsBuilt; who = i; } });
   return who;
 };
 
-export const computeFinalScores = (players) => {
+export const computeFinalScores = (players, titles) => {
   const scores = computeScores(players);
-  const army = computeLargestArmy(players);
-  const road = computeLongestRoad(players);
+  const army = computeLargestArmy(players, titles);
+  const road = computeLongestRoad(players, titles);
   return scores.map((s, i) => s + (army === i ? 2 : 0) + (road === i ? 2 : 0));
 };
 
 export const WINNING_SCORE = 10;
 
 export const isGameFinished = (state) =>
-  state.started && computeFinalScores(state.players).some(s => s >= WINNING_SCORE);
+  state.started && computeFinalScores(state.players, state.titles).some(s => s >= WINNING_SCORE);

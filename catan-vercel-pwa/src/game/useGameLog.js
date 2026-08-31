@@ -55,7 +55,10 @@ export function useGameLog() {
   }, []);
 
   // Reemplaza el log completo y recalcula el estado (cargar partida, deshacer, sync).
+  // No-op si la secuencia es idéntica (los resyncs periódicos no re-renderizan al pedo).
   const replaceActions = useCallback((newActions) => {
+    const cur = actionsRef.current;
+    if (cur.length === newActions.length && cur.every((a, i) => a.uid === newActions[i].uid)) return;
     actionsRef.current = newActions;
     setActions(newActions);
     setGame(replayActions(newActions));

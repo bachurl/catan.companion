@@ -1,7 +1,9 @@
 // Smoke test del reducer: replaya una partida y verifica invariantes.
 // Correr con: npm run test:reducer
-import { gameReducer, initialGameState, replayActions } from "../src/game/reducer.js";
+import { gameReducer, initialGameState, replayActions, robberNum, robberRes } from "../src/game/reducer.js";
 import { totalC } from "../src/game/constants.js";
+import { mergeWithLocal } from "../src/online/mergeLog.js";
+import { computeFinalScores, computeLongestRoad, computeLargestArmy } from "../src/game/selectors.js";
 
 let failures = 0;
 const assert = (cond, msg) => {
@@ -72,7 +74,7 @@ actions.push({ type: "STEAL", ts, victim: 0, res: "trigo" });
 s = replayActions(actions);
 assert(totalC(s.players[0].hand) === 3, "Ana descartó 4 y le robaron 1");
 assert(s.players[1].hand.trigo === 1, "Beto robó 1 trigo");
-assert(s.robber === 8, "ladrón en el 8");
+assert(robberNum(s.robber) === 8 && robberRes(s.robber) === null, "ladrón en el 8 (sin recurso: bloquea todo el número)");
 
 console.log("ROLL bloqueado por ladrón:");
 actions.push({ type: "END_TURN", ts });
@@ -156,6 +158,222 @@ ls = replayActions(lobbyActions);
 assert(ls.players[1].hand.trigo === 1, "el 6 produce para Caro tras empezar");
 assert(replayActions([...lobbyActions, { type: "BEGIN_GAME", ts }]).started === true, "BEGIN_GAME repetido es inofensivo");
 assert(replayActions([...lobbyActions, { type: "SET_INITIAL_SETTLEMENTS", ts, player: 1, settlements: [] }]).players[1].productions.length === 2, "SET_INITIAL_SETTLEMENTS ignorado con partida empezada");
+
+console.log("LADRÓN: bloquea un hexágono (num + res), no todo el número:");
+{
+  // Ana: 8-madera y 8-trigo. Beto: 8-oveja.
+  const rob = [
+    {
+      type: "START_GAME", ts, mode: "full",
+      players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }],
+      settlements: {
+        0: [{ hexes: [{ num: "8", res: "madera" }] }, { hexes: [{ num: "8", res: "trigo" }] }],
+        1: [{ hexes: [{ num: "8", res: "oveja" }] }],
+      },
+      deck,
+    },
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera" },
+    { type: "ROLL", ts, d1: 4, d2: 4, manual: true },
+  ];
+  let rs = replayActions(rob);
+  assert(rs.players[0].hand.madera === 0, "el 8-madera queda bloqueado");
+  assert(rs.players[0].hand.trigo === 1, "el 8-trigo de la misma jugadora SÍ produce");
+  assert(rs.players[1].hand.oveja === 1, "el 8-oveja de Beto SÍ produce");
+  assert(rs.lastDistribution.lines.length === 2, "la distribución lista a los dos jugadores");
+
+  // Acción vieja (sin res): sigue bloqueando todo el número.
+  const legacy = [rob[0], { type: "PLACE_ROBBER", ts, num: 8 }, rob[2]];
+  const ls2 = replayActions(legacy);
+  assert(totalC(ls2.players[0].hand) === 0 && totalC(ls2.players[1].hand) === 0, "acción vieja sin res bloquea todo el 8");
+
+  // Contadores de tiradas
+  assert(rs.rollCount === 1 && rs.diceTotals[8] === 1, "rollCount y diceTotals acumulan");
+  rs = replayActions([...rob, { type: "ROLL", ts, d1: 4, d2: 4, manual: true }]);
+  assert(rs.rollCount === 2 && rs.diceTotals[8] === 2, "segunda tirada acumula");
+}
+
+console.log("LADRÓN: dos hexágonos con el MISMO número y recurso (el 8 de 1-2 vs. el 8 de 2-3):");
+{
+  // Tres jugadores, todos con un 8-madera. Pero son DOS hexágonos distintos:
+  // uno toca a Ana y Beto, el otro a Beto y Caro.
+  const start = {
+    type: "START_GAME", ts, mode: "full",
+    players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }, { name: "Caro", ci: 2 }],
+    settlements: {
+      0: [{ hexes: [{ num: "8", res: "madera" }] }],
+      1: [{ hexes: [{ num: "8", res: "madera" }] }],
+      2: [{ hexes: [{ num: "8", res: "madera" }] }],
+    },
+    deck,
+  };
+  const roll8 = { type: "ROLL", ts, d1: 4, d2: 4, manual: true };
+
+  // Ladrón en el 8-madera que toca a Ana y Beto
+  let s2 = replayActions([start, { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [0, 1] }, roll8]);
+  assert(s2.players[0].hand.madera === 0, "Ana bloqueada");
+  assert(s2.players[1].hand.madera === 0, "Beto bloqueado");
+  assert(s2.players[2].hand.madera === 1, "Caro NO bloqueado: es el otro hexágono");
+
+  // El otro 8-madera: toca a Beto y Caro
+  s2 = replayActions([start, { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [1, 2] }, roll8]);
+  assert(s2.players[0].hand.madera === 1, "Ana produce con el otro hexágono bloqueado");
+  assert(s2.players[1].hand.madera === 0, "Beto bloqueado (toca los dos hexágonos)");
+  assert(s2.players[2].hand.madera === 0, "Caro bloqueado");
+
+  // Mover el ladrón: la colocación nueva reemplaza a la anterior
+  s2 = replayActions([start,
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [0, 1] },
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [1, 2] },
+    roll8]);
+  assert(s2.players[0].hand.madera === 1 && s2.players[2].hand.madera === 0, "mover el ladrón libera el hexágono anterior");
+
+  // Sin `players` (o acción vieja): bloquea a todos los que tengan ese hexágono
+  s2 = replayActions([start, { type: "PLACE_ROBBER", ts, num: 8, res: "madera" }, roll8]);
+  assert(totalC(s2.players[0].hand) === 0 && totalC(s2.players[2].hand) === 0, "sin players bloquea a todos (compatibilidad)");
+
+  // Reordenar jugadores mueve los índices del hexágono bloqueado
+  const moved = replayActions([start,
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [0, 1] },
+    { type: "MOVE_PLAYER", ts, idx: 0, dir: 1 },
+    roll8]);
+  assert(moved.players[1].name === "Ana" && moved.players[1].hand.madera === 0, "Ana sigue bloqueada tras reordenar");
+  assert(moved.players[2].name === "Caro" && moved.players[2].hand.madera === 1, "Caro sigue sin bloquear tras reordenar");
+}
+
+console.log("CORRECCIONES: cartas de desarrollo, stats, títulos y ciudades:");
+{
+  const fix = [
+    {
+      type: "START_GAME", ts, mode: "full",
+      players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }],
+      settlements: { 0: [{ hexes: [{ num: "6", res: "trigo" }] }], 1: [] },
+      deck,
+    },
+  ];
+  let fs = replayActions(fix);
+  assert(computeFinalScores(fs.players, fs.titles)[0] === 1, "Ana arranca con 1 VP (un poblado)");
+
+  // Cartas de desarrollo a mano (mazo físico)
+  fix.push({ type: "ADJUST_DEV", ts, player: 0, card: "victoria", delta: 1 });
+  fix.push({ type: "ADJUST_DEV", ts, player: 0, card: "victoria", delta: 1 });
+  fs = replayActions(fix);
+  assert(fs.players[0].devCards.filter(c => c === "victoria").length === 2, "2 cartas de victoria agregadas");
+  assert(computeFinalScores(fs.players, fs.titles)[0] === 3, "las cartas de victoria suman al puntaje");
+  fix.push({ type: "ADJUST_DEV", ts, player: 0, card: "victoria", delta: -1 });
+  fs = replayActions(fix);
+  assert(fs.players[0].devCards.filter(c => c === "victoria").length === 1, "sacar una carta funciona");
+  assert(replayActions([...fix, { type: "ADJUST_DEV", ts, player: 1, card: "caballero", delta: -1 }]).players[1].devCards.length === 0,
+    "sacar una carta que no tiene es no-op");
+
+  // Título manual: Beto se queda el camino más largo sin tener 5 caminos
+  fix.push({ type: "SET_TITLE", ts, title: "longestRoad", player: 1 });
+  fs = replayActions(fix);
+  assert(computeLongestRoad(fs.players, fs.titles) === 1, "camino más largo asignado a mano");
+  assert(computeFinalScores(fs.players, fs.titles)[1] === 2, "el título da +2 VP aunque no tenga caminos cargados");
+  fix.push({ type: "SET_TITLE", ts, title: "longestRoad", player: null });
+  fs = replayActions(fix);
+  assert(computeLongestRoad(fs.players, fs.titles) === null, "volver a null restaura el automático");
+
+  // Stats manuales
+  fix.push({ type: "ADJUST_STAT", ts, player: 1, stat: "knightsPlayed", delta: 3 });
+  fs = replayActions(fix);
+  assert(fs.players[1].knightsPlayed === 3 && computeLargestArmy(fs.players, fs.titles) === 1, "3 caballeros a mano dan el ejército");
+  assert(replayActions([...fix, { type: "ADJUST_STAT", ts, player: 1, stat: "hack", delta: 9 }]).players[1].hack === undefined,
+    "ADJUST_STAT ignora stats desconocidos");
+  assert(replayActions([...fix, { type: "ADJUST_STAT", ts, player: 1, stat: "roadsBuilt", delta: -5 }]).players[1].roadsBuilt === 0,
+    "los stats no bajan de 0");
+
+  // Ciudades por corrección
+  const gid = fs.players[0].productions[0].gid;
+  fix.push({ type: "UPGRADE_CITY_FREE", ts, player: 0, gid });
+  fs = replayActions(fix);
+  assert(fs.players[0].productions[0].isCity === true, "poblado marcado como ciudad sin costo");
+  assert(totalC(fs.players[0].hand) === 0, "no descuenta recursos");
+  fix.push({ type: "ADD_FREE_SETTLEMENT", ts, player: 1, hexes: [{ num: "9", res: "mineral" }], isCity: true });
+  fs = replayActions(fix);
+  assert(fs.players[1].productions[0].isCity === true, "ciudad nueva cargada directa");
+  fix.push({ type: "ROLL", ts, d1: 5, d2: 4, manual: true });
+  fs = replayActions(fix);
+  assert(fs.players[1].hand.mineral === 2, "la ciudad cargada produce doble");
+
+  // MOVE_PLAYER reubica el título manual
+  const moved = replayActions([
+    ...fix.slice(0, 1),
+    { type: "SET_TITLE", ts, title: "largestArmy", player: 0 },
+    { type: "MOVE_PLAYER", ts, idx: 0, dir: 1 },
+  ]);
+  assert(moved.titles.largestArmy === 1 && moved.players[1].name === "Ana", "el título sigue al jugador al reordenar");
+}
+
+console.log("BUY_DEV con carta elegida (mazo físico):");
+{
+  const buy = [
+    {
+      type: "START_GAME", ts, mode: "simple",
+      players: [{ name: "Ana", ci: 0 }], settlements: { 0: [] }, deck: ["caballero", "monopolio"],
+    },
+    { type: "BUY_DEV", ts, card: "monopolio" },
+  ];
+  let bs = replayActions(buy);
+  assert(bs.players[0].devCards[0] === "monopolio", "se compra la carta elegida, no el tope del mazo");
+  assert(bs.deck.length === 1 && bs.deck[0] === "caballero", "esa carta sale del mazo virtual");
+  bs = replayActions([...buy, { type: "BUY_DEV", ts, card: "victoria" }]);
+  assert(bs.players[0].devCards.length === 2, "se puede elegir una carta que el mazo virtual ya no tiene");
+  assert(replayActions([...buy, { type: "BUY_DEV", ts }, { type: "BUY_DEV", ts }]).players[0].devCards.length === 2,
+    "sin carta explícita usa el mazo virtual y se frena al vaciarse");
+}
+
+console.log("EXPANSIÓN 5-6: construir en turno ajeno:");
+{
+  const exp = [
+    {
+      type: "START_GAME", ts, mode: "full", expansion: true,
+      players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }],
+      settlements: { 0: [{ hexes: [{ num: "6", res: "trigo" }] }], 1: [{ hexes: [{ num: "6", res: "madera" }] }] },
+      deck: ["monopolio", "caballero"],
+    },
+    // Beto junta recursos y construye un camino en el turno de Ana
+    { type: "MANUAL_ADJUST", ts, player: 1, res: "madera", delta: 1 },
+    { type: "MANUAL_ADJUST", ts, player: 1, res: "ladrillo", delta: 1 },
+    { type: "BUILD_ROAD", ts, player: 1 },
+  ];
+  let es = replayActions(exp);
+  assert(es.expansion === true, "la partida guarda el flag de expansión");
+  assert(es.cp === 0, "sigue siendo el turno de Ana");
+  assert(es.players[1].roadsBuilt === 1, "Beto construyó en el turno de Ana");
+  assert(es.players[0].roadsBuilt === 0, "no se le cargó a la jugadora de turno");
+  assert(totalC(es.players[1].hand) === 0, "el costo salió de la mano de Beto");
+
+  // Sin `player` la construcción sigue siendo del jugador de turno (acciones viejas)
+  assert(replayActions([...exp, { type: "MANUAL_ADJUST", ts, player: 0, res: "madera", delta: 1 },
+    { type: "MANUAL_ADJUST", ts, player: 0, res: "ladrillo", delta: 1 },
+    { type: "BUILD_ROAD", ts }]).players[0].roadsBuilt === 1, "sin player construye el de turno");
+
+  // Carta comprada en turno ajeno: se puede jugar cuando llega su turno
+  exp.push({ type: "MANUAL_ADJUST", ts, player: 1, res: "mineral", delta: 1 });
+  exp.push({ type: "MANUAL_ADJUST", ts, player: 1, res: "trigo", delta: 1 });
+  exp.push({ type: "MANUAL_ADJUST", ts, player: 1, res: "oveja", delta: 1 });
+  exp.push({ type: "BUY_DEV", ts, player: 1, card: "caballero" });
+  es = replayActions(exp);
+  assert(es.players[1].devCards[0] === "caballero", "Beto compró en el turno de Ana");
+  assert(es.players[1].devCardBought.includes("caballero"), "queda marcada como comprada");
+  exp.push({ type: "END_TURN", ts }); // arranca el turno de Beto
+  exp.push({ type: "ROLL", ts, d1: 1, d2: 1, manual: true });
+  exp.push({ type: "PLAY_DEV", ts, card: "caballero", cardIdx: 0 });
+  es = replayActions(exp);
+  assert(es.cp === 1, "es el turno de Beto");
+  assert(es.players[1].knightsPlayed === 1, "puede jugar en su turno la carta comprada en el ajeno");
+}
+
+console.log("mergeWithLocal (resync online):");
+{
+  const server = [{ uid: "a", type: "X" }, { uid: "b", type: "Y" }];
+  const merged = mergeWithLocal(server, [{ uid: "b", type: "Y" }, { uid: "c", type: "Z" }, { uid: "c", type: "Z" }]);
+  assert(merged.length === 3 && merged[2].uid === "c", "canónico primero, extra local al final, sin duplicados");
+  assert(mergeWithLocal(server, []).length === 2, "sin extras devuelve el canónico");
+  assert(mergeWithLocal([], [{ uid: "c", type: "Z" }]).length === 1, "server vacío conserva lo local");
+  assert(mergeWithLocal(server, [{ type: "SIN_UID" }]).length === 2, "extra sin uid se descarta");
+}
 
 console.log("Determinismo (replay dos veces = mismo estado):");
 const s1 = JSON.stringify(replayActions(actions));

@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { supabase, ensureAnonSession, isOnlineConfigured } from "./supabaseClient.js";
+import { mergeWithLocal } from "./mergeLog.js";
 
 // ═══════════════════════════════════════════════
 //  SALA ONLINE — sync del log de acciones vía Supabase
@@ -8,12 +9,19 @@ import { supabase, ensureAnonSession, isOnlineConfigured } from "./supabaseClien
 //  Cada cliente aplica localmente sus acciones al instante (offline-first)
 //  y las inserta; Realtime broadcastea los INSERT y los demás las aplican.
 //  El dedupe es por `uid` (generado por el cliente que originó la acción).
-//  Si falla el insert (sin red), la acción queda en una cola local que se
-//  reintenta al reconectar, seguida de un refetch completo para resincronizar.
+//
+//  Convergencia: Realtime puede perder eventos (websocket dormido en
+//  background, reconexiones, throttling). Por eso el orden canónico del
+//  servidor (id autoincremental) se re-adopta con un refetch completo
+//  ("resync") en cada señal de riesgo: reconexión del canal, vuelta a
+//  foreground, recuperar red, evento fuera de orden y un heartbeat
+//  periódico. Las acciones locales que aún no llegaron a la base (inserts
+//  en vuelo o cola offline) se preservan al final del merge.
 // ═══════════════════════════════════════════════
 
 const PENDING_KEY = "catan.onlinePending.v1";
 const ROOM_KEY = "catan.onlineRoom.v1";
+const RESYNC_INTERVAL_MS = 45000;
 
 // Código de la última sala activa (para reconectar tras un refresh).
 export const loadSavedRoomCode = () => {
@@ -49,9 +57,12 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
 
   const channelRef = useRef(null);
   const seenUidsRef = useRef(new Set());
-  const pendingRef = useRef([]); // [{room_id, author_id, uid, action}]
+  const pendingRef = useRef([]); // [{room_id, author_id, uid, action}] — cola offline
+  const unconfirmedRef = useRef(new Map()); // uid → acción local con insert en vuelo
+  const lastServerIdRef = useRef(0); // último id canónico aplicado (detecta fuera-de-orden)
   const roomRef = useRef(null);
   const flushingRef = useRef(false);
+  const resyncingRef = useRef(false);
 
   const markSeen = useCallback((uids) => {
     uids.forEach(u => seenUidsRef.current.add(u));
@@ -62,17 +73,42 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
     if (data) setMembers(data);
   }, []);
 
+  // Log completo de la sala en orden canónico (id del servidor).
   const fetchAllActions = useCallback(async (roomId) => {
     const { data, error } = await supabase
       .from("room_actions")
-      .select("uid, action")
+      .select("id, uid, action")
       .eq("room_id", roomId)
       .order("id", { ascending: true });
     if (error) throw error;
-    return data.map(r => ({ ...r.action, uid: r.uid }));
+    return {
+      list: data.map(r => ({ ...r.action, uid: r.uid })),
+      maxId: data.length > 0 ? Number(data[data.length - 1].id) : 0,
+    };
   }, []);
 
-  // Reintenta la cola pendiente; si había algo, resincroniza el log completo.
+  // Re-adopta el orden canónico del servidor, preservando las acciones
+  // locales que todavía no llegaron a la base (en vuelo + cola offline).
+  const resync = useCallback(async () => {
+    const r = roomRef.current;
+    if (!r || resyncingRef.current) return;
+    resyncingRef.current = true;
+    try {
+      const { list, maxId } = await fetchAllActions(r.roomId);
+      if (roomRef.current?.roomId === r.roomId) {
+        lastServerIdRef.current = Math.max(lastServerIdRef.current, maxId);
+        markSeen(list.map(a => a.uid));
+        const extras = [
+          ...unconfirmedRef.current.values(),
+          ...pendingRef.current.map(p => ({ ...p.action, uid: p.uid })),
+        ];
+        onResync?.(mergeWithLocal(list, extras));
+      }
+    } catch { /* sin red: se reintenta en la próxima señal */ }
+    resyncingRef.current = false;
+  }, [fetchAllActions, markSeen, onResync]);
+
+  // Reintenta la cola pendiente; termina con un resync canónico.
   const flushPending = useCallback(async () => {
     if (flushingRef.current || pendingRef.current.length === 0 || !roomRef.current) return;
     flushingRef.current = true;
@@ -86,13 +122,17 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
         savePending(pendingRef.current);
         setPendingCount(pendingRef.current.length);
       }
-      // Cola vacía: refetch para adoptar el orden canónico del servidor.
-      const all = await fetchAllActions(roomRef.current.roomId);
-      markSeen(all.map(a => a.uid));
-      onResync?.(all);
     } catch { /* seguimos offline: se reintenta en la próxima señal */ }
     flushingRef.current = false;
-  }, [fetchAllActions, markSeen, onResync]);
+    await resync();
+  }, [resync]);
+
+  // Señal de riesgo de desfase: vaciar la cola si hay, y resincronizar.
+  const kick = useCallback(() => {
+    if (!roomRef.current) return;
+    if (pendingRef.current.length > 0) flushPending();
+    else resync();
+  }, [flushPending, resync]);
 
   const subscribe = useCallback((roomId) => {
     if (channelRef.current) supabase.removeChannel(channelRef.current);
@@ -101,9 +141,20 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
       .on("postgres_changes",
         { event: "INSERT", schema: "public", table: "room_actions", filter: `room_id=eq.${roomId}` },
         (payload) => {
-          const { uid, action } = payload.new;
-          if (seenUidsRef.current.has(uid)) return;
+          const { id, uid, action } = payload.new;
+          const nid = Number(id) || 0;
+          if (seenUidsRef.current.has(uid)) {
+            lastServerIdRef.current = Math.max(lastServerIdRef.current, nid);
+            return;
+          }
           seenUidsRef.current.add(uid);
+          // Llegó una acción anterior a algo ya aplicado: nuestro orden local
+          // divergió del canónico → resync completo en vez de aplicar.
+          if (nid > 0 && nid < lastServerIdRef.current) {
+            resync();
+            return;
+          }
+          lastServerIdRef.current = Math.max(lastServerIdRef.current, nid);
           onRemoteAction?.({ ...action, uid });
         })
       .on("postgres_changes",
@@ -112,19 +163,35 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
       .subscribe((status) => {
         const ok = status === "SUBSCRIBED";
         setConnected(ok);
-        if (ok) flushPending();
+        // Cada (re)conexión del canal pudo perder eventos intermedios.
+        if (ok) kick();
       });
     channelRef.current = channel;
-  }, [onRemoteAction, fetchMembers, flushPending]);
+  }, [onRemoteAction, fetchMembers, kick, resync]);
 
-  // Reintento al recuperar conectividad del navegador.
+  // Señales de riesgo: recuperar red y volver a foreground (websocket dormido).
   useEffect(() => {
-    const onOnline = () => flushPending();
+    const onOnline = () => kick();
+    const onVisibility = () => { if (document.visibilityState === "visible") kick(); };
     window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
-  }, [flushPending]);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [kick]);
 
-  // Crea una sala nueva subiendo el log actual (el host ya empezó la partida).
+  // Heartbeat: resync periódico mientras hay sala y la app está visible
+  // (red de seguridad contra eventos Realtime perdidos en silencio).
+  useEffect(() => {
+    if (!room) return;
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") kick();
+    }, RESYNC_INTERVAL_MS);
+    return () => clearInterval(t);
+  }, [room, kick]);
+
+  // Crea una sala nueva subiendo el log actual (puede ser vacío: lobby).
   const createRoom = useCallback(async (currentActions) => {
     const uid = await ensureAnonSession();
     setUserId(uid);
@@ -141,6 +208,7 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
       if (e2) throw e2;
     }
     markSeen(currentActions.map(a => a.uid));
+    lastServerIdRef.current = 0;
     const r = { roomId: roomRow.id, code, isHost: true };
     roomRef.current = r;
     setRoom(r);
@@ -159,8 +227,9 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
       .from("rooms").select().eq("code", code).maybeSingle();
     if (error) throw error;
     if (!roomRow) throw new Error("Sala no encontrada. Revisá el código.");
-    const all = await fetchAllActions(roomRow.id);
+    const { list: all, maxId } = await fetchAllActions(roomRow.id);
     markSeen(all.map(a => a.uid));
+    lastServerIdRef.current = maxId;
     const r = { roomId: roomRow.id, code, isHost: roomRow.host_id === uid };
     roomRef.current = r;
     setRoom(r);
@@ -170,14 +239,17 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
     return { room: r, actions: all };
   }, [subscribe, fetchMembers, fetchAllActions, markSeen]);
 
-  // Publica una acción local (ya aplicada). Si falla, va a la cola.
+  // Publica una acción local (ya aplicada). Queda "en vuelo" hasta que el
+  // insert resuelve; si falla, pasa a la cola offline.
   const pushAction = useCallback((stamped) => {
     const r = roomRef.current;
     if (!r) return;
     seenUidsRef.current.add(stamped.uid);
+    unconfirmedRef.current.set(stamped.uid, stamped);
     const { uid: actionUid, ...action } = stamped;
     const row = { room_id: r.roomId, author_id: userId, uid: actionUid, action };
     supabase.from("room_actions").insert(row).then(({ error }) => {
+      unconfirmedRef.current.delete(actionUid);
       if (error && error.code !== "23505") {
         pendingRef.current = [...pendingRef.current, row];
         savePending(pendingRef.current);
@@ -203,6 +275,8 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
     roomRef.current = null;
     seenUidsRef.current = new Set();
     pendingRef.current = [];
+    unconfirmedRef.current = new Map();
+    lastServerIdRef.current = 0;
     savePending([]);
     setPendingCount(0);
     setRoom(null);

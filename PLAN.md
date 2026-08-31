@@ -35,8 +35,23 @@ Esto habilita con una sola pieza:
 - [x] **B5** Gating por turno: con jugador reclamado solo se actúa en el turno propio (ingresar/tirar dados, construir, comerciar, jugar cartas, terminar turno). El host puede corregir siempre (ajustes manuales, deshacer, reordenar); un celular sin jugador reclamado controla la mesa completa (fallback si se apaga un teléfono).
 - [x] **B6** UX multi-celular: botón grande "Terminar mi turno", vibración + aviso al empezar tu turno, teclado de dados manual recordado (para dados físicos), compartir código de sala con link `?sala=CODIGO` que precarga el código.
 - [x] **B7** Lobby online: la sala se crea apenas el host elige modo y cantidad (código compartible al instante); cada jugador se une, reclama su asiento, pone nombre/color y carga sus propios poblados iniciales desde su celular; el host (o un celular mesa) comienza la partida. El setup en un solo celular sigue disponible ("Cargar todo en este celular").
+- [x] **B8** Convergencia de sync (issue #24): resync canónico (refetch + merge con acciones locales en vuelo/cola) en cada señal de riesgo — reconexión del canal, vuelta a foreground, recuperar red, evento fuera de orden — más heartbeat periódico. Evita que un celular quede desfasado por eventos Realtime perdidos.
 
 Decisión v1: el creador de la sala carga el setup (nombres, poblados); los demás se unen y juegan.
+
+## Fase D — Feedback de las primeras partidas reales (30/8)
+
+- [x] **D1** (#24) Convergencia de sync — ver B8.
+- [x] **D2** (#25) El ladrón bloquea un hexágono (número + recurso), no todos los del número.
+- [x] **D3** (#26) Cartas de desarrollo jugables antes de tirar (caballero para mover el ladrón).
+- [x] **D4** (#27) Puntaje real: al comprar se elige la carta que salió del mazo físico, y se pueden corregir cartas de desarrollo por jugador.
+- [x] **D5** (#28) Correcciones: agregar/marcar ciudad además de poblado.
+- [x] **D6** (#29) Barra superior ordenada por puntos (incluye cartas de victoria y títulos).
+- [x] **D7** (#30) Contador de rondas y de tiradas acumulado en el estado.
+- [x] **D8** (#31) Insights de tiradas: salido vs. esperado, más/menos frecuentes, tiradas sin 7.
+- [x] **D9** (#32) Camino más largo / ejército: ajuste de caminos y caballeros, y asignación manual del título.
+- [x] **D10** (#33) Expansión 5-6: fase de construcción especial (construir en turno ajeno).
+- [x] **D11** (#34) Consultor de reglas con IA vía Vercel Function (`api/rules.js`).
 
 ## Fase C — Pulido pre-lanzamiento
 

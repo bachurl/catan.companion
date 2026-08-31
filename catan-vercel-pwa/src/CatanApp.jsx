@@ -3,9 +3,9 @@ import { STYLE_CSS } from "./styles";
 import { DiceFace, ResBadge } from "./components";
 import {
   RES, RM, NUMS, COSTS, COST_NAMES, COST_EMOJI, INIT_DECK, DC, COLORS,
-  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
+  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr, numberProb,
 } from "./game/constants";
-import { computeGains, replayActions, effectiveActions } from "./game/reducer";
+import { computeGains, replayActions, effectiveActions, robberNum, robberRes, robberLabel } from "./game/reducer";
 import { computeScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
 import { describeAction } from "./game/describe";
 import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog";
@@ -19,9 +19,26 @@ const TURN_ACTIONS = new Set([
   "UPGRADE_CITY", "BUY_DEV", "PLAY_DEV", "MONOPOLY", "YEAR_OF_PLENTY",
   "TRADE_BANK", "TRADE_PLAYER", "ADD_PORT", "REMOVE_PORT", "END_TURN",
 ]);
-const FIX_ACTIONS = new Set(["MANUAL_ADJUST", "ADD_FREE_SETTLEMENT", "MOVE_PLAYER", "UNDO"]);
+const FIX_ACTIONS = new Set([
+  "MANUAL_ADJUST", "ADD_FREE_SETTLEMENT", "UPGRADE_CITY_FREE", "ADJUST_DEV",
+  "ADJUST_STAT", "SET_TITLE", "MOVE_PLAYER", "UNDO",
+]);
 // En el lobby, cada celular edita solo a su jugador (el host o la mesa, a cualquiera).
 const LOBBY_ACTIONS = new Set(["SET_PLAYER_NAME", "SET_INITIAL_SETTLEMENTS"]);
+// Construcciones: en la expansión 5-6 se permiten en turno ajeno, siempre que
+// la acción sea para el propio jugador (fase de construcción especial).
+const BUILD_ACTIONS = new Set(["BUILD_ROAD", "ADD_SETTLEMENT", "UPGRADE_CITY", "BUY_DEV"]);
+
+// Agrupa las producciones de un jugador por poblado/ciudad (gid).
+const getSettlementGroups = (p) => {
+  const groups = {};
+  p.productions.forEach(pr => {
+    if (!groups[pr.gid]) groups[pr.gid] = { hexes: [], isCity: false, gid: pr.gid };
+    groups[pr.gid].hexes.push(pr);
+    if (pr.isCity) groups[pr.gid].isCity = true;
+  });
+  return Object.values(groups);
+};
 
 // Preferencia local: quien tira dados físicos ve el teclado 2-12 directo.
 const PREF_MANUAL_KEY = "catan.dadosManuales.v1";
@@ -77,15 +94,20 @@ export default function CatanApp() {
             return null;
           }
         } else if (TURN_ACTIONS.has(action.type)) {
-          showNotif(`⏳ Es el turno de ${game.players[game.cp]?.name || "otro jugador"}`);
-          return null;
+          // Excepción: expansión 5-6, construir para uno mismo en turno ajeno.
+          const specialBuild = game.expansion && BUILD_ACTIONS.has(action.type)
+            && action.player === online.myPlayerIndex;
+          if (!specialBuild) {
+            showNotif(`⏳ Es el turno de ${game.players[game.cp]?.name || "otro jugador"}`);
+            return null;
+          }
         }
       }
     }
     const stamped = dispatchAction(action);
     if (online.room) online.pushAction(stamped);
     return stamped;
-  }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.started, game.cp, game.players, showNotif]);
+  }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.started, game.cp, game.players, game.expansion, showNotif]);
 
   // Partida guardada pendiente de retomar (si existe y no terminó)
   const [savedGame, setSavedGame] = useState(() => {
@@ -101,6 +123,8 @@ export default function CatanApp() {
   const [phase, setPhase] = useState("mode");
   const [gameMode, setGameMode] = useState("full");
   const [pCount, setPCount] = useState(3);
+  const [expansion, setExpansion] = useState(false); // 5-6: fase de construcción especial
+  const [buildSeat, setBuildSeat] = useState(null); // quién construye (mesa local con expansión)
   const [setupPlayers, setSetupPlayers] = useState([]);
   const [setupIdx, setSetupIdx] = useState(0);
   const [setupData, setSetupData] = useState({});
@@ -121,6 +145,10 @@ export default function CatanApp() {
   const [tradeGive, setTradeGive] = useState(eHand());
   const [tradeReceive, setTradeReceive] = useState(eHand());
   // Lobby: asiento en edición (null = el jugador reclamado) + editor local
+  const [fixOpen, setFixOpen] = useState(null); // jugador con el panel de correcciones abierto
+  const [rulesQ, setRulesQ] = useState("");
+  const [rulesMsgs, setRulesMsgs] = useState([]);
+  const [rulesBusy, setRulesBusy] = useState(false);
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [editingSeat, setEditingSeat] = useState(null);
   const [seatLoaded, setSeatLoaded] = useState(null);
@@ -138,13 +166,21 @@ export default function CatanApp() {
   const canAct = !inRoomAsPlayer || isMyTurn;
   const canFix = canAct || Boolean(online.room?.isHost);
 
+  // ── CONSTRUCCIÓN ──
+  // Con la expansión 5-6 se puede construir en el turno de otro: en una sala
+  // cada celular construye para su jugador; en modo mesa se elige el asiento.
+  const buildIdx = inRoomAsPlayer ? myIdx : (game.expansion && buildSeat !== null ? buildSeat : cp);
+  const buildingForOther = buildIdx !== cp;
+  const canBuildNow = !buildingForOther || Boolean(game.expansion);
+  const builder = players[buildIdx] || players[cp];
+
   // La pantalla no se apaga durante la partida (se libera al terminar).
   useWakeLock(phase === "game" && game.started && winner === null);
 
   // ── SCORES (derivados del estado del juego) ──
   const scores = useMemo(() => computeScores(players), [players]);
-  const largestArmy = useMemo(() => computeLargestArmy(players), [players]);
-  const longestRoad = useMemo(() => computeLongestRoad(players), [players]);
+  const largestArmy = useMemo(() => computeLargestArmy(players, game.titles), [players, game.titles]);
+  const longestRoad = useMemo(() => computeLongestRoad(players, game.titles), [players, game.titles]);
 
   const finalScores = useMemo(() => scores.map((s, i) => {
     let v = s;
@@ -153,13 +189,42 @@ export default function CatanApp() {
     return v;
   }), [scores, largestArmy, longestRoad]);
 
-  // Dice history stats (2..12)
+  // Orden de la barra superior: por puntos (incluye cartas de victoria y títulos).
+  // El sort es estable, así que a igual puntaje queda el orden de turnos.
+  const scoreOrder = useMemo(
+    () => players.map((_, i) => i).sort((a, b) => finalScores[b] - finalScores[a]),
+    [players, finalScores],
+  );
+
+  // ── ESTADÍSTICAS DE TIRADAS ──
+  // Los conteos vienen acumulados del estado (diceTotals), no del historial
+  // visible, que se recorta a las últimas 24.
   const diceCounts = useMemo(() => {
     const c = {};
-    for (let n = 2; n <= 12; n++) c[n] = 0;
-    diceHistory.forEach(v => { if (c[v] !== undefined) c[v] += 1; });
+    for (let n = 2; n <= 12; n++) c[n] = game.diceTotals?.[n] || 0;
     return c;
-  }, [diceHistory]);
+  }, [game.diceTotals]);
+
+  const diceInsights = useMemo(() => {
+    const total = game.rollCount || 0;
+    const nums = Array.from({ length: 11 }, (_, k) => k + 2);
+    if (total === 0) return { total, rows: [], hot: null, cold: null, since7: 0 };
+    const rows = nums.map(n => {
+      const count = diceCounts[n] || 0;
+      const expected = total * (numberProb(n) / 36); // veces esperadas según probabilidad
+      return { n, count, expected, diff: count - expected };
+    });
+    const sorted = [...rows].sort((a, b) => b.diff - a.diff);
+    const idx7 = diceHistory.indexOf(7);
+    return {
+      total,
+      rows,
+      hot: sorted[0],
+      cold: sorted[sorted.length - 1],
+      // -1 = no hay 7 en el historial visible (últimas 24)
+      since7: idx7 === -1 ? -1 : idx7,
+    };
+  }, [diceCounts, game.rollCount, diceHistory]);
 
   // ── CHECK WIN ──
   useEffect(() => {
@@ -184,6 +249,7 @@ export default function CatanApp() {
   // (quien usa dados físicos ve el teclado 2-12 directo).
   useEffect(() => {
     if (game.started) setManualPickerOpen(loadPrefManual());
+    setBuildSeat(null); // la fase de construcción especial es por turno
   }, [game.started, cp, turn]);
 
   // ── TRANSICIÓN LOBBY ⇄ JUEGO ──
@@ -271,6 +337,7 @@ export default function CatanApp() {
     dispatch({
       type: "START_GAME",
       mode: gameMode,
+      expansion,
       players: setupPlayers.map(p => ({ name: p.name, ci: p.ci })),
       settlements: setupData,
       deck: shuffle([...INIT_DECK]),
@@ -310,13 +377,14 @@ export default function CatanApp() {
       } else {
         setModal({ type: "robber" });
       }
-    } else if (sum === robber) {
-      showNotif(`⛔ El ladrón bloquea el ${sum}. Nadie recibe recursos.`);
     } else {
       const gains = computeGains(players, sum, robber);
       const receiving = gains.filter(g => totalC(g) > 0).length;
+      const blocked = robberNum(robber) === sum;
       if (receiving > 0) {
-        showNotif(`📦 Recursos distribuidos (${receiving} jugador${receiving === 1 ? "" : "es"})`, 2500);
+        showNotif(`📦 Recursos distribuidos (${receiving} jugador${receiving === 1 ? "" : "es"})${blocked ? ` · 🦹 bloquea el ${robberLabel(robber)}` : ""}`, 2500);
+      } else if (blocked) {
+        showNotif(`⛔ El ladrón bloquea el ${robberLabel(robber)}. Nadie recibe recursos.`);
       } else {
         showNotif(`Nadie produce con el ${sum}`);
       }
@@ -348,19 +416,35 @@ export default function CatanApp() {
     dispatch({ type: "DISCARD", player: playerIdx, discards });
   };
 
-  const placeRobber = (num) => {
-    dispatch({ type: "PLACE_ROBBER", num });
-    // Check who to steal from
+  // Jugadores que producen con ese número (y recurso, si se eligió).
+  const playersOnHex = (num, res) => players
+    .map((p, i) => (p.productions.some(pr => pr.num === num && (!res || pr.res === res)) ? i : -1))
+    .filter(i => i >= 0);
+
+  // Paso 2 → 3: si más de un jugador tiene ese número+recurso, puede haber dos
+  // hexágonos distintos (el 8 de 1 y 2 vs. el 8 de 2 y 3) y hay que preguntar.
+  const chooseRobberRes = (num, res) => {
+    const onHex = playersOnHex(num, res);
+    if (onHex.length <= 1) { placeRobber(num, res, onHex.length ? onHex : null); return; }
+    setModal(m => ({ ...m, res, sel: onHex }));
+  };
+
+  const placeRobber = (num, res, sel) => {
+    const onHex = sel && sel.length ? sel : null;
+    dispatch({ type: "PLACE_ROBBER", num, res: res ?? null, players: onHex });
+    // Víctimas: los lindantes al hexágono bloqueado (menos vos) con cartas.
     const victims = [];
     players.forEach((p, i) => {
       if (i === cp) return;
-      if (p.productions.some(pr => pr.num === num) && totalC(p.hand) > 0) victims.push(i);
+      if (onHex && !onHex.includes(i)) return;
+      const touches = p.productions.some(pr => pr.num === num && (!res || pr.res === res));
+      if (touches && totalC(p.hand) > 0) victims.push(i);
     });
     if (victims.length > 0) {
       setModal({ type: "steal", victims });
     } else {
       setModal(null);
-      showNotif(`Ladrón en el ${num}. No hay a quién robar.`);
+      showNotif(`Ladrón en el ${res ? `${num} ${RM[res].e}` : num}. No hay a quién robar.`);
     }
   };
 
@@ -377,17 +461,19 @@ export default function CatanApp() {
 
   // Construir con confirmación + error claro
   const requestBuild = (type) => {
-    if (!canAct) {
+    if (!canBuildNow) {
       showNotif(`⏳ Es el turno de ${players[cp]?.name}`);
       return;
     }
     if (mode.enforceCosts) {
-      if (turnPhase !== "rolled") {
+      // En la fase de construcción especial no hace falta haber tirado:
+      // el dado es del jugador de turno, no de quien construye.
+      if (!buildingForOther && turnPhase !== "rolled") {
         showNotif("Primero tirá los dados (y esperá a que se distribuyan recursos)");
         return;
       }
       const cost = COSTS[type];
-      if (!afford(players[cp].hand, cost)) {
+      if (!afford(builder.hand, cost)) {
         showNotif("No se puede: te faltan recursos");
         return;
       }
@@ -397,10 +483,10 @@ export default function CatanApp() {
 
   const doBuild = (type) => {
     const cost = COSTS[type];
-    if (mode.enforceCosts && !afford(players[cp].hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
+    if (mode.enforceCosts && !afford(builder.hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
 
     if (type === "camino") {
-      dispatch({ type: "BUILD_ROAD" });
+      dispatch({ type: "BUILD_ROAD", player: buildIdx });
       showNotif("Camino construido");
     } else if (type === "poblado") {
       setModalHexes([{ num: "", res: "" }]);
@@ -408,21 +494,25 @@ export default function CatanApp() {
     } else if (type === "ciudad") {
       setModal({ type: "upgradeCity" });
     } else if (type === "desarrollo") {
-      if (deck.length === 0) { showNotif("No quedan cartas de desarrollo"); return; }
-      const card = deck[0];
-      dispatch({ type: "BUY_DEV" });
-      showNotif(`Compraste: ${DC[card].e} ${DC[card].n}`);
+      // El mazo físico de la mesa manda: se elige qué carta salió.
+      setModal({ type: "pickDev" });
     }
   };
 
+  const buyDevCard = (card) => {
+    dispatch({ type: "BUY_DEV", card, player: buildIdx });
+    showNotif(card ? `Compraste: ${DC[card].e} ${DC[card].n}` : "Carta de desarrollo comprada");
+    setModal(null);
+  };
+
   const addSettlement = (hexes) => {
-    dispatch({ type: "ADD_SETTLEMENT", hexes });
+    dispatch({ type: "ADD_SETTLEMENT", hexes, player: buildIdx });
     showNotif("Poblado construido");
     setModal(null);
   };
 
   const upgradeToCity = (gidVal) => {
-    dispatch({ type: "UPGRADE_CITY", gid: gidVal });
+    dispatch({ type: "UPGRADE_CITY", gid: gidVal, player: buildIdx });
     showNotif("Ciudad construida");
     setModal(null);
   };
@@ -503,20 +593,42 @@ export default function CatanApp() {
     dispatch({ type: "REMOVE_PORT", port });
   };
 
-  const addFreeSettlement = (playerIdx) => {
+  const addFreeSettlement = (playerIdx, isCity = false) => {
     setModalHexes([{ num: "", res: "" }]);
-    setModal({ type: "freeSettlement", playerIdx });
+    setModal({ type: "freeSettlement", playerIdx, isCity });
   };
 
-  const addFreeProductions = (playerIdx, hexes) => {
-    dispatch({ type: "ADD_FREE_SETTLEMENT", player: playerIdx, hexes });
-    showNotif("Poblado agregado");
+  const addFreeProductions = (playerIdx, hexes, isCity) => {
+    dispatch({ type: "ADD_FREE_SETTLEMENT", player: playerIdx, hexes, isCity });
+    showNotif(isCity ? "Ciudad agregada" : "Poblado agregado");
     setModal(null);
   };
 
   const manualAdjust = (playerIdx, res, delta) => {
     dispatch({ type: "MANUAL_ADJUST", player: playerIdx, res, delta });
   };
+
+  // ── CORRECCIONES (mesa física manda sobre el estado de la app) ──
+  // Marcar un poblado ya cargado como ciudad, para cualquier jugador.
+  const requestCityFree = (playerIdx) => {
+    const groups = getSettlementGroups(players[playerIdx]).filter(g => !g.isCity);
+    if (groups.length === 0) {
+      // Sin poblados para mejorar: se carga la ciudad directamente con sus hexágonos.
+      addFreeSettlement(playerIdx, true);
+      return;
+    }
+    setModal({ type: "cityFree", playerIdx });
+  };
+
+  const upgradeCityFree = (playerIdx, gidVal) => {
+    dispatch({ type: "UPGRADE_CITY_FREE", player: playerIdx, gid: gidVal });
+    showNotif("🏙️ Ciudad marcada");
+    setModal(null);
+  };
+
+  const adjustDev = (playerIdx, card, delta) => dispatch({ type: "ADJUST_DEV", player: playerIdx, card, delta });
+  const adjustStat = (playerIdx, stat, delta) => dispatch({ type: "ADJUST_STAT", player: playerIdx, stat, delta });
+  const assignTitle = (title, playerIdx) => dispatch({ type: "SET_TITLE", title, player: playerIdx });
 
   // ── ONLINE: crear / unirse / reconectar ──
   const createOnlineRoom = async () => {
@@ -536,7 +648,7 @@ export default function CatanApp() {
     try {
       const r = await online.createRoom([]);
       resetGame(); // el lobby arranca con log limpio (descarta cualquier partida local previa)
-      dispatch({ type: "CREATE_LOBBY", mode: gameMode, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
+      dispatch({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
       setSavedGame(null);
       setWinner(null);
       setEditingSeat(null);
@@ -585,6 +697,37 @@ export default function CatanApp() {
     np[si].hexes = np[si].hexes.filter((_, j) => j !== hi);
     return np;
   });
+
+  // ── CONSULTOR DE REGLAS ──
+  // La pregunta va a /api/rules (la API key vive en el server, no en el cliente).
+  const askRules = async (q) => {
+    const question = (q ?? rulesQ).trim();
+    if (!question || rulesBusy) return;
+    const next = [...rulesMsgs, { role: "user", content: question }];
+    setRulesQ("");
+    setRulesMsgs(next);
+    setRulesBusy(true);
+    try {
+      const r = await fetch("/api/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question,
+          history: rulesMsgs.slice(-6),
+          context: { expansion: Boolean(game.expansion) },
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      setRulesMsgs([...next, {
+        role: "assistant",
+        content: data.answer || data.error || "No pude responder. Probá de nuevo.",
+        isError: !data.answer,
+      }]);
+    } catch {
+      setRulesMsgs([...next, { role: "assistant", content: "Sin conexión: no pude consultar las reglas.", isError: true }]);
+    }
+    setRulesBusy(false);
+  };
 
   // Comparte el código de sala con un link que lo precarga (?sala=CODIGO).
   const shareRoomCode = async () => {
@@ -743,12 +886,27 @@ export default function CatanApp() {
         <p className="text-slate-300 mb-4 text-lg">¿Cuántos jugadores?</p>
         <div className="flex gap-3 justify-center mb-8">
           {[2, 3, 4, 5, 6].map(n => (
-            <button key={n} onClick={() => setPCount(n)}
+            <button key={n} onClick={() => { setPCount(n); setExpansion(n >= 5); }}
               className={`w-14 h-14 rounded-xl text-xl font-bold transition-all ${pCount === n ? "bg-amber-500 text-white scale-110 shadow-lg shadow-amber-500/30" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
               {n}
             </button>
           ))}
         </div>
+
+        {pCount >= 5 && (
+          <button onClick={() => setExpansion(v => !v)}
+            className={`w-full mb-6 p-3 rounded-2xl border-2 text-left transition-all ${expansion ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60"}`}>
+            <div className="flex items-center gap-3">
+              <div className={`w-5 h-5 rounded flex items-center justify-center text-xs font-black ${expansion ? "bg-amber-500 text-white" : "bg-slate-700 text-slate-500"}`}>
+                {expansion ? "✓" : ""}
+              </div>
+              <div className="flex-1">
+                <div className="font-bold text-amber-300 text-sm">Expansión 5-6 jugadores</div>
+                <div className="text-slate-400 text-xs">Habilita la fase de construcción especial: cada uno puede construir en el turno de otro.</div>
+              </div>
+            </div>
+          </button>
+        )}
         {online.isConfigured ? (
           <div className="space-y-3">
             <button onClick={createLobbyRoom} disabled={lobbyBusy}
@@ -1129,17 +1287,6 @@ export default function CatanApp() {
     { id: "log", label: "Log", e: "📋" },
   ].filter(t => mode.showDevCards || !t.hideInSimple);
 
-  // Group settlements for display
-  const getSettlementGroups = (p) => {
-    const groups = {};
-    p.productions.forEach(pr => {
-      if (!groups[pr.gid]) groups[pr.gid] = { hexes: [], isCity: false, gid: pr.gid };
-      groups[pr.gid].hexes.push(pr);
-      if (pr.isCity) groups[pr.gid].isCity = true;
-    });
-    return Object.values(groups);
-  };
-
   return (
     <div className="catan-app flex flex-col">
       <style>{STYLE_CSS}</style>
@@ -1171,14 +1318,14 @@ export default function CatanApp() {
             <div className="w-8 h-8 rounded-full" style={{backgroundColor:COLORS[cur.ci].h}} />
             <div>
               <span className="text-white font-bold">{cur.name}</span>
-              <span className="text-slate-400 text-sm ml-2">Turno {turn}</span>
+              <span className="text-slate-400 text-sm ml-2">Ronda {turn}</span>
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider ${game.gameMode === "simple" ? "bg-slate-700 text-slate-300" : "bg-amber-900/60 text-amber-300"}`}>
                 {game.gameMode === "simple" ? "Simple" : "Completo"}
               </span>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {robber && <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">🦹 {robber}</span>}
+            {robberNum(robber) !== null && <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">🦹 {robberLabel(robber)}</span>}
             {online.isConfigured && (
               <button onClick={() => setModal({ type: "online" })}
                 className="relative w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded-lg text-base transition-all"
@@ -1189,6 +1336,11 @@ export default function CatanApp() {
                 )}
               </button>
             )}
+            <button onClick={() => setModal({ type: "rules" })}
+              className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-base transition-all"
+              title="Consultar reglas">
+              ❓
+            </button>
             {canUndo && canFix && (
               <button onClick={requestUndo}
                 className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-base transition-all"
@@ -1209,16 +1361,19 @@ export default function CatanApp() {
       {/* Scores bar */}
       <div className="bg-slate-800/50 border-b border-slate-700/50 px-4 py-2 overflow-x-auto">
         <div className="flex gap-4 max-w-2xl mx-auto px-2">
-          {players.map((p, i) => (
+          {scoreOrder.map((i, pos) => {
+            const p = players[i];
+            return (
             <div key={i} className={`flex items-center gap-2 text-sm whitespace-nowrap ${i === cp ? "opacity-100" : "opacity-60"}`}>
               <div className="w-3 h-3 rounded-full" style={{backgroundColor:COLORS[p.ci].h}} />
-              <span className="text-white font-medium">{p.name}</span>
+              <span className="text-white font-medium">{pos === 0 && finalScores[i] > 0 ? "👑 " : ""}{p.name}</span>
               <span className="text-amber-400 font-bold">{finalScores[i]}VP</span>
               {largestArmy === i && <span title="Ejército más grande">⚔️</span>}
               {longestRoad === i && <span title="Camino más largo">🛤️</span>}
               <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${totalC(p.hand) > 7 ? "bg-red-900/50 text-red-300" : "text-slate-400"}`} title={totalC(p.hand) > 7 ? "Más de 7 cartas: se descarta si sale 7" : "Cartas en mano"}>{totalC(p.hand)}🃏</span>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -1347,42 +1502,70 @@ export default function CatanApp() {
 
               </div>
 
-              {/* Historial de números (tipo ruleta) */}
+              {/* Historial y estadísticas de tiradas (acumulado de toda la partida) */}
               <div className="bg-slate-800 rounded-2xl p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-slate-300 font-semibold">Historial de tiradas</h3>
-                  <span className="text-slate-500 text-xs">últimas {Math.min(12, diceHistory.length)}/12</span>
+                  <h3 className="text-slate-300 font-semibold">Tiradas</h3>
+                  <span className="text-slate-500 text-xs">Ronda {turn} · {diceInsights.total} tirada{diceInsights.total === 1 ? "" : "s"}</span>
                 </div>
-                {diceHistory.length === 0 ? (
+                {diceInsights.total === 0 ? (
                   <p className="text-slate-500 text-sm">Todavía no hay tiradas en esta partida.</p>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {diceHistory.slice(0, 12).map((n, i) => (
-                        <span key={i} className={`px-3 py-1 rounded-full text-sm font-bold ${i === 0 ? "bg-amber-500 text-white" : "bg-slate-700 text-slate-200"}`}>
-                          {n}
-                        </span>
-                      ))}
-                    </div>
+                ) : (() => {
+                  const H = 56;
+                  const max = Math.max(1, ...diceInsights.rows.map(r => Math.max(r.count, r.expected)));
+                  return (
+                    <>
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        {diceHistory.slice(0, 12).map((n, i) => (
+                          <span key={i} className={`px-3 py-1 rounded-full text-sm font-bold ${i === 0 ? "bg-amber-500 text-white" : "bg-slate-700 text-slate-200"}`}>
+                            {n}
+                          </span>
+                        ))}
+                      </div>
 
-                    <div className="grid grid-cols-11 gap-1 items-end">
-                      {Array.from({ length: 11 }, (_, k) => k + 2).map(n => {
-                        const v = diceCounts[n] || 0;
-                        return (
+                      {/* Barra = veces que salió. Línea punteada = veces esperadas
+                          según la probabilidad real de cada número. */}
+                      <div className="grid grid-cols-11 gap-1 items-end">
+                        {diceInsights.rows.map(({ n, count, expected }) => (
                           <div key={n} className="flex flex-col items-center gap-1">
-                            <div
-                              className="w-full bg-slate-700 rounded-md"
-                              style={{ height: `${Math.min(44, 6 + v * 6)}px` }}
-                              title={`${n}: ${v}`}
-                            />
+                            <div style={{ position: "relative", width: "100%", height: H }}
+                              title={`${n}: salió ${count} · esperado ${expected.toFixed(1)}`}>
+                              <div style={{
+                                position: "absolute", bottom: 0, left: 0, right: 0,
+                                height: Math.max(2, (count / max) * H), borderRadius: 4,
+                                background: n === 7 ? "#b94a3c" : count > expected ? "#d4a853" : "#475569",
+                              }} />
+                              <div style={{
+                                position: "absolute", bottom: (expected / max) * H, left: -1, right: -1,
+                                borderTop: "1px dashed rgba(240,230,211,.5)",
+                              }} />
+                            </div>
                             <span className="text-[10px] text-slate-400">{n}</span>
+                            <span className="text-[9px] text-slate-500">{count}</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                    <p className="text-slate-500 text-xs mt-3">Tip: 6 y 8 son los números más probables. Este gráfico es el historial real de la partida.</p>
-                  </>
-                )}
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 mt-4">
+                        {[
+                          { l: "Más salió", v: diceInsights.hot ? `${diceInsights.hot.n}` : "—", s: diceInsights.hot ? `${diceInsights.hot.count} veces` : "" },
+                          { l: "Menos salió", v: diceInsights.cold ? `${diceInsights.cold.n}` : "—", s: diceInsights.cold ? `${diceInsights.cold.count} veces` : "" },
+                          { l: "Sin 7 hace", v: diceInsights.since7 === -1 ? "12+" : `${diceInsights.since7}`, s: "tiradas" },
+                        ].map(({ l, v, s }) => (
+                          <div key={l} className="bg-slate-700/40 rounded-xl py-2 text-center">
+                            <div className="text-slate-400 text-[10px] uppercase tracking-wider">{l}</div>
+                            <div className="text-amber-300 text-xl font-black">{v}</div>
+                            <div className="text-slate-500 text-[10px]">{s}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-slate-500 text-xs mt-3">
+                        La línea punteada es lo esperado por probabilidad (6 y 8 son los más probables). Ojo: los dados no tienen memoria —
+                        que un número venga frío no lo hace más probable en la próxima.
+                      </p>
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Current player hand (o la mano reclamada en una sala online) */}
@@ -1412,13 +1595,37 @@ export default function CatanApp() {
           {tab === "construir" && (
             <div className="space-y-4">
               <h3 className="text-slate-300 font-semibold">Construcciones</h3>
-              {!canAct && (
+
+              {/* Mesa local con expansión: elegir quién construye */}
+              {game.expansion && !inRoomAsPlayer && (
+                <div className="bg-slate-800/60 rounded-2xl p-3">
+                  <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-2">Construye</div>
+                  <div className="flex flex-wrap gap-2">
+                    {players.map((p, i) => (
+                      <button key={i} onClick={() => setBuildSeat(i === cp ? null : i)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-all"
+                        style={{ backgroundColor: i === buildIdx ? COLORS[p.ci].h : "#334155" }}>
+                        {p.name}{i === cp ? " (turno)" : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!canBuildNow && (
                 <p className="text-slate-400 text-sm">⏳ Es el turno de <span className="font-bold text-amber-300">{cur.name}</span>. Solo quien tiene el turno construye.</p>
+              )}
+              {canBuildNow && buildingForOther && (
+                <p className="text-amber-300/90 text-sm bg-amber-500/10 border border-amber-500/30 rounded-xl p-3">
+                  🏗️ <b>Fase de construcción especial</b> (expansión 5-6): construyendo para <b>{builder.name}</b> en el turno de {cur.name}.
+                </p>
               )}
               {Object.entries(COSTS)
                 .filter(([type]) => mode.showDevCards || type !== "desarrollo")
                 .map(([type, cost]) => {
-                const canBuild = canAct && (mode.enforceCosts ? (afford(cur.hand, cost) && turnPhase === "rolled") : true);
+                const canBuild = canBuildNow && (mode.enforceCosts
+                  ? (afford(builder.hand, cost) && (buildingForOther || turnPhase === "rolled"))
+                  : true);
                 return (
                   <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
                     <div>
@@ -1440,12 +1647,12 @@ export default function CatanApp() {
               })}
 
               <div className="bg-slate-800/50 rounded-2xl p-4 mt-6">
-                <h3 className="text-slate-300 font-semibold mb-3">{inRoomAsPlayer && !isMyTurn ? `Propiedades de ${cur.name}` : "Tus propiedades"}</h3>
-                {getSettlementGroups(cur).length === 0 ? (
+                <h3 className="text-slate-300 font-semibold mb-3">{buildIdx === cp && !inRoomAsPlayer ? "Tus propiedades" : `Propiedades de ${builder.name}`}</h3>
+                {getSettlementGroups(builder).length === 0 ? (
                   <p className="text-slate-500 text-sm">Sin propiedades registradas</p>
                 ) : (
                   <div className="space-y-2">
-                    {getSettlementGroups(cur).map((g, i) => (
+                    {getSettlementGroups(builder).map((g, i) => (
                       <div key={g.gid} className="flex items-center gap-2 flex-wrap">
                         <span className="text-white text-sm">{g.isCity ? "🏙️" : "🏠"}</span>
                         {g.hexes.map(h => (
@@ -1539,7 +1746,9 @@ export default function CatanApp() {
               secretas); se juegan solo en el turno propio. */}
           {tab === "cartas" && (() => {
             const cardOwner = inRoomAsPlayer && players[myIdx] ? players[myIdx] : cur;
-            const canPlayNow = canAct && cardOwner === cur && turnPhase === "rolled";
+            // Regla oficial: una carta se puede jugar en cualquier momento del
+            // turno propio, también ANTES de tirar (caballero para mover el ladrón).
+            const canPlayNow = canAct && cardOwner === cur;
             return (
               <div className="space-y-4">
                 <div className="bg-slate-800 rounded-2xl p-4">
@@ -1570,7 +1779,7 @@ export default function CatanApp() {
                     </div>
                   )}
                   {inRoomAsPlayer && !isMyTurn && cardOwner.devCards.some(c => c !== "victoria") && (
-                    <p className="text-slate-500 text-xs mt-2">⏳ Las cartas se juegan en tu turno, después de tirar los dados.</p>
+                    <p className="text-slate-500 text-xs mt-2">⏳ Las cartas se juegan en tu turno (antes o después de tirar).</p>
                   )}
                 </div>
                 <p className="text-slate-500 text-sm text-center">Quedan {deck.length} cartas en el mazo</p>
@@ -1594,8 +1803,14 @@ export default function CatanApp() {
                     {canFix && (
                       <div className="flex items-center gap-1.5">
                         <button onClick={() => addFreeSettlement(i)}
-                          className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg">
-                          + Poblado
+                          className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg"
+                          title="Agregar poblado">
+                          + 🏠
+                        </button>
+                        <button onClick={() => requestCityFree(i)}
+                          className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg"
+                          title="Marcar/agregar ciudad">
+                          + 🏙️
                         </button>
                         <button
                           onClick={() => movePlayer(i, -1)}
@@ -1649,12 +1864,76 @@ export default function CatanApp() {
                   </div>
 
                   {/* Extra info */}
-                  <div className="flex gap-3 mt-2 text-xs text-slate-400">
+                  <div className="flex gap-3 mt-2 text-xs text-slate-400 items-center">
                     <span>⚔️ {p.knightsPlayed}</span>
                     <span>🛤️ {p.roadsBuilt}</span>
                     <span>🃏 {p.devCards.length}</span>
                     {p.ports.length > 0 && <span>⚓ {p.ports.map(pt => pt === "3:1" ? "3:1" : RM[pt]?.e).join(" ")}</span>}
+                    {canFix && (
+                      <button onClick={() => setFixOpen(fixOpen === i ? null : i)}
+                        className="ml-auto text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg">
+                        {fixOpen === i ? "Cerrar" : "✏️ Corregir puntos"}
+                      </button>
+                    )}
                   </div>
+
+                  {/* Correcciones: cartas de desarrollo, caballeros/caminos y títulos.
+                      Lo que vale es la mesa física; acá se lleva la app a ese estado. */}
+                  {canFix && fixOpen === i && (
+                    <div className="mt-3 pt-3 border-t border-slate-700 space-y-3">
+                      {mode.showDevCards && (
+                        <div>
+                          <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Cartas de desarrollo</div>
+                          <div className="space-y-1">
+                            {Object.entries(DC).map(([key, c]) => {
+                              const n = p.devCards.filter(d => d === key).length;
+                              return (
+                                <div key={key} className="flex items-center gap-2">
+                                  <span className="text-base w-5 text-center">{c.e}</span>
+                                  <span className="text-slate-300 text-xs flex-1 truncate">{c.n}</span>
+                                  <button onClick={() => adjustDev(i, key, -1)} disabled={n === 0}
+                                    className="w-6 h-6 bg-slate-700 hover:bg-red-700 disabled:opacity-30 text-slate-300 rounded text-xs">−</button>
+                                  <span className="text-white text-xs font-bold w-4 text-center">{n}</span>
+                                  <button onClick={() => adjustDev(i, key, 1)}
+                                    className="w-6 h-6 bg-slate-700 hover:bg-green-700 text-slate-300 rounded text-xs">+</button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-4">
+                        {[["knightsPlayed", "⚔️ Caballeros"], ["roadsBuilt", "🛤️ Caminos"]].map(([stat, label]) => (
+                          <div key={stat} className="flex items-center gap-1.5">
+                            <span className="text-slate-400 text-xs">{label}</span>
+                            <button onClick={() => adjustStat(i, stat, -1)}
+                              className="w-6 h-6 bg-slate-700 hover:bg-red-700 text-slate-300 rounded text-xs">−</button>
+                            <span className="text-white text-xs font-bold w-4 text-center">{p[stat]}</span>
+                            <button onClick={() => adjustStat(i, stat, 1)}
+                              className="w-6 h-6 bg-slate-700 hover:bg-green-700 text-slate-300 rounded text-xs">+</button>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div>
+                        <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Títulos (+2 VP cada uno)</div>
+                        <div className="flex gap-2">
+                          {[["largestArmy", "⚔️ Ejército", largestArmy], ["longestRoad", "🛤️ Camino", longestRoad]].map(([key, label, holder]) => {
+                            const manual = game.titles?.[key] === i;
+                            const auto = !manual && holder === i;
+                            return (
+                              <button key={key} onClick={() => assignTitle(key, manual ? null : i)}
+                                className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${manual ? "bg-amber-500 text-white" : auto ? "bg-slate-700 text-amber-300" : "bg-slate-700 hover:bg-slate-600 text-slate-300"}`}>
+                                {manual ? `${label} ✓ manual` : auto ? `${label} (auto)` : `Asignar ${label}`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="text-slate-500 text-[10px] mt-1.5">La app no ve el tablero: si el camino más largo no coincide con el conteo, asignalo a mano. Tocá de nuevo para volver al automático.</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1803,7 +2082,7 @@ export default function CatanApp() {
                     <button
                       onClick={() => {
                         // Para acciones que no abren otro modal, cerramos DESPUÉS.
-                        if (type === "camino" || type === "desarrollo") {
+                        if (type === "camino") {
                           doBuild(type);
                           setModal(null);
                         } else {
@@ -1819,6 +2098,85 @@ export default function CatanApp() {
                 </div>
               );
             })()}
+
+            {/* Consultor de reglas */}
+            {modal.type === "rules" && (
+              <div>
+                <h3 className="text-xl font-bold text-amber-400 mb-1">❓ Reglas de Catán</h3>
+                <p className="text-slate-400 text-xs mb-3">Preguntá una duda puntual para seguir jugando.</p>
+
+                <div className="bg-slate-900/60 rounded-2xl p-3 mb-3 max-h-64 overflow-y-auto space-y-2">
+                  {rulesMsgs.length === 0 && !rulesBusy && (
+                    <div className="space-y-1.5">
+                      <p className="text-slate-500 text-xs mb-2">Por ejemplo:</p>
+                      {[
+                        "¿Puedo jugar dos cartas de desarrollo en el mismo turno?",
+                        "¿El ladrón puede quedarse en el desierto?",
+                        "¿Cómo se cuenta el camino más largo si se corta?",
+                      ].map(q => (
+                        <button key={q} onClick={() => askRules(q)}
+                          className="w-full text-left text-xs bg-slate-700/60 hover:bg-slate-700 text-slate-300 rounded-lg px-3 py-2 transition-all">
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {rulesMsgs.map((m, i) => (
+                    <div key={i} className={`text-sm rounded-xl px-3 py-2 ${m.role === "user"
+                      ? "bg-blue-500/20 text-blue-100 ml-6"
+                      : m.isError ? "bg-red-900/30 text-red-200 mr-6" : "bg-slate-700/60 text-slate-100 mr-6"}`}>
+                      {m.content}
+                    </div>
+                  ))}
+                  {rulesBusy && <div className="text-slate-500 text-sm px-3 py-2">Consultando…</div>}
+                </div>
+
+                <form onSubmit={(e) => { e.preventDefault(); askRules(); }} className="flex gap-2">
+                  <input
+                    value={rulesQ}
+                    onChange={e => setRulesQ(e.target.value)}
+                    placeholder="Tu pregunta…"
+                    maxLength={500}
+                    className="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:border-amber-500 focus:outline-none"
+                  />
+                  <button type="submit" disabled={rulesBusy || !rulesQ.trim()}
+                    className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold rounded-xl transition-all">
+                    Preguntar
+                  </button>
+                </form>
+
+                <button onClick={() => setModal(null)} className="w-full py-3 mt-2 bg-slate-700 text-slate-300 rounded-xl font-bold">
+                  Cerrar
+                </button>
+              </div>
+            )}
+
+            {/* Elegir qué carta de desarrollo salió del mazo físico */}
+            {modal.type === "pickDev" && (
+              <div>
+                <h3 className="text-xl font-bold text-purple-400 mb-2">🃏 ¿Qué carta salió?</h3>
+                <p className="text-slate-300 text-sm mb-4">Elegí la carta que sacaste del mazo de la mesa, así tu mano en la app coincide con la real.</p>
+                <div className="space-y-2 mb-3">
+                  {Object.entries(DC).map(([key, c]) => {
+                    const left = deck.filter(d => d === key).length;
+                    return (
+                      <button key={key} onClick={() => buyDevCard(key)}
+                        className="w-full bg-slate-700 hover:bg-slate-600 rounded-xl p-3 flex items-center gap-3 text-left transition-all">
+                        <span className="text-2xl">{c.e}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-white text-sm font-bold">{c.n}</div>
+                          <div className="text-slate-400 text-xs">{c.d}</div>
+                        </div>
+                        <span className="text-slate-500 text-xs whitespace-nowrap">{left} en mazo</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button onClick={() => setModal(null)} className="w-full py-3 bg-slate-700 text-slate-300 rounded-xl font-bold">
+                  Cancelar
+                </button>
+              </div>
+            )}
 
             {/* Discard modal */}
             {modal.type === "discard" && (() => {
@@ -1889,23 +2247,96 @@ export default function CatanApp() {
             })()}
 
             {/* Robber placement */}
-            {modal.type === "robber" && (
-              <div>
-                <h3 className="text-xl font-bold text-red-400 mb-2">🦹 Colocar el ladrón</h3>
-                <p className="text-slate-300 text-sm mb-4">Elegí en qué número colocar el ladrón para bloquear la producción.</p>
-                <div className="grid grid-cols-5 gap-2 mb-4">
-                  {NUMS.map(n => (
-                    <button key={n} onClick={() => placeRobber(n)}
-                      className={`py-3 rounded-xl font-bold text-lg transition-all ${n === robber ? "bg-red-600 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
-                      {n}
-                    </button>
-                  ))}
+            {modal.type === "robber" && (() => {
+              // El ladrón bloquea UN hexágono: número + recurso. Se marcan los
+              // recursos que realmente están en juego con ese número.
+              const inPlay = new Set(players.flatMap(p =>
+                p.productions.filter(pr => pr.num === modal.num).map(pr => pr.res)));
+
+              // Paso 3: varios jugadores comparten ese número+recurso, así que
+              // puede haber dos hexágonos iguales. Se elige a cuáles toca este.
+              if (modal.sel) {
+                const toggle = (i) => setModal(m => ({
+                  ...m,
+                  sel: m.sel.includes(i) ? m.sel.filter(x => x !== i) : [...m.sel, i],
+                }));
+                return (
+                  <div>
+                    <h3 className="text-xl font-bold text-red-400 mb-2">🦹 ¿A quiénes toca ese hexágono?</h3>
+                    <p className="text-slate-300 text-sm mb-1">
+                      Hay varios jugadores con el <b className="text-white">{modal.num} {RM[modal.res]?.e}</b>.
+                    </p>
+                    <p className="text-slate-400 text-xs mb-4">
+                      Si son dos hexágonos distintos, dejá marcados solo los que tocan el que estás bloqueando.
+                    </p>
+                    <div className="space-y-2 mb-4">
+                      {playersOnHex(modal.num, modal.res).map(i => (
+                        <button key={i} onClick={() => toggle(i)}
+                          className={`w-full py-2.5 px-3 rounded-xl flex items-center gap-3 text-sm font-semibold transition-all ${modal.sel.includes(i) ? "bg-red-500/25 ring-1 ring-red-400 text-white" : "bg-slate-700 text-slate-400"}`}>
+                          <span className={`w-5 h-5 rounded flex items-center justify-center text-xs font-black ${modal.sel.includes(i) ? "bg-red-500 text-white" : "bg-slate-600 text-slate-500"}`}>
+                            {modal.sel.includes(i) ? "✓" : ""}
+                          </span>
+                          <span className="w-4 h-4 rounded-full" style={{ backgroundColor: COLORS[players[i].ci].h }} />
+                          <span>{players[i].name}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setModal(m => ({ ...m, res: undefined, sel: undefined }))}
+                        className="py-3 px-4 bg-slate-700 text-slate-300 rounded-xl font-bold text-sm">
+                        ← Atrás
+                      </button>
+                      <button onClick={() => placeRobber(modal.num, modal.res, modal.sel)}
+                        disabled={modal.sel.length === 0}
+                        className="flex-1 py-3 bg-red-500 hover:bg-red-400 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-xl font-bold">
+                        Bloquear
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div>
+                  <h3 className="text-xl font-bold text-red-400 mb-2">🦹 Colocar el ladrón</h3>
+                  <p className="text-slate-300 text-sm mb-3">
+                    {modal.num ? "Ahora elegí el recurso de ese hexágono." : "Elegí el número del hexágono donde va el ladrón."}
+                  </p>
+                  <div className="grid grid-cols-5 gap-2 mb-4">
+                    {NUMS.map(n => (
+                      <button key={n} onClick={() => setModal(m => ({ ...m, num: n }))}
+                        className={`py-3 rounded-xl font-bold text-lg transition-all ${n === modal.num ? "bg-red-600 text-white ring-2 ring-red-300" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  {modal.num && (
+                    <>
+                      <p className="text-slate-400 text-xs mb-2">Hexágono con el <b className="text-white">{modal.num}</b> — recurso:</p>
+                      <div className="grid grid-cols-1 gap-2 mb-3">
+                        {RES.map(r => {
+                          const n = playersOnHex(modal.num, r.id).length;
+                          return (
+                            <button key={r.id} onClick={() => chooseRobberRes(modal.num, r.id)}
+                              className={`${r.bg} ${r.tx} py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 ${inPlay.has(r.id) ? "ring-2 ring-amber-300" : "opacity-70"}`}>
+                              {r.e} {r.n}
+                              {n > 0 && <span className="text-xs font-semibold">· {n} jugador{n === 1 ? "" : "es"}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <button onClick={() => placeRobber(modal.num, null, null)}
+                        className="w-full py-2 mb-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-sm">
+                        Bloquear todos los {modal.num} (no sé el recurso)
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => { setModal(null); }} className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-sm">
+                    Saltar (sin ladrón)
+                  </button>
                 </div>
-                <button onClick={() => { setModal(null); }} className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-sm">
-                  Saltar (sin ladrón)
-                </button>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Steal */}
             {modal.type === "steal" && (
@@ -1965,7 +2396,7 @@ export default function CatanApp() {
               const targetIdx = modal.type === "freeSettlement" ? modal.playerIdx : cp;
               return (
                 <div>
-                  <h3 className="text-xl font-bold text-green-400 mb-2">🏠 Nuevo poblado</h3>
+                  <h3 className="text-xl font-bold text-green-400 mb-2">{modal.isCity ? "🏙️ Nueva ciudad" : "🏠 Nuevo poblado"}</h3>
                   <p className="text-slate-300 text-sm mb-4">
                     {modal.type === "freeSettlement" ? `Para ${players[targetIdx].name}. ` : ""}
                     Agregá los hexágonos adyacentes (1-3).
@@ -1997,7 +2428,7 @@ export default function CatanApp() {
                     <button onClick={() => setModal(null)} className="flex-1 py-3 bg-slate-700 text-slate-300 rounded-xl font-bold">Cancelar</button>
                     <button disabled={!modalHexes.some(h => h.num && h.res)}
                       onClick={() => {
-                        if (modal.type === "freeSettlement") addFreeProductions(targetIdx, modalHexes);
+                        if (modal.type === "freeSettlement") addFreeProductions(targetIdx, modalHexes, modal.isCity);
                         else addSettlement(modalHexes);
                       }}
                       className="flex-1 py-3 bg-green-500 hover:bg-green-400 text-white rounded-xl font-bold disabled:opacity-30">
@@ -2010,7 +2441,7 @@ export default function CatanApp() {
 
             {/* Upgrade to city */}
             {modal.type === "upgradeCity" && (() => {
-              const groups = getSettlementGroups(cur).filter(g => !g.isCity);
+              const groups = getSettlementGroups(builder).filter(g => !g.isCity);
               return (
                 <div>
                   <h3 className="text-xl font-bold text-amber-400 mb-2">🏙️ Mejorar a ciudad</h3>
@@ -2034,6 +2465,37 @@ export default function CatanApp() {
                     </div>
                   )}
                   <button onClick={() => setModal(null)} className="w-full py-2 bg-slate-700 text-slate-400 rounded-xl text-sm mt-3">Cancelar</button>
+                </div>
+              );
+            })()}
+
+            {/* Marcar ciudad (corrección, cualquier jugador) */}
+            {modal.type === "cityFree" && (() => {
+              const target = players[modal.playerIdx];
+              const groups = getSettlementGroups(target).filter(g => !g.isCity);
+              return (
+                <div>
+                  <h3 className="text-xl font-bold text-amber-400 mb-2">🏙️ Marcar ciudad</h3>
+                  <p className="text-slate-300 text-sm mb-4">Elegí qué poblado de <b>{target.name}</b> ya es ciudad. Sin costo (corrección).</p>
+                  <div className="space-y-2">
+                    {groups.map(g => (
+                      <button key={g.gid} onClick={() => upgradeCityFree(modal.playerIdx, g.gid)}
+                        className="w-full bg-slate-700 hover:bg-slate-600 rounded-xl p-3 flex items-center gap-2">
+                        <span>🏠</span>
+                        {g.hexes.map(h => (
+                          <span key={h.id} className={`${RM[h.res].bg} ${RM[h.res].tx} px-2 py-0.5 rounded text-xs`}>
+                            {h.num} {RM[h.res].e}
+                          </span>
+                        ))}
+                        <span className="text-amber-400 ml-auto">→ 🏙️</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => { setModal(null); addFreeSettlement(modal.playerIdx, true); }}
+                    className="w-full py-2 mt-3 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-sm">
+                    + Cargar una ciudad nueva con sus hexágonos
+                  </button>
+                  <button onClick={() => setModal(null)} className="w-full py-2 bg-slate-700 text-slate-400 rounded-xl text-sm mt-2">Cancelar</button>
                 </div>
               );
             })()}

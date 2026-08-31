@@ -12,6 +12,12 @@ export const describeAction = (action, preState) => {
     case "ROLL": return `${action.manual ? "Número ingresado" : "Tirada de dados"}: ${action.d1 + action.d2} (${cpName})`;
     case "DISCARD": return `Descarte de ${name(action.player)}`;
     case "PLACE_ROBBER": return `Ladrón colocado en el ${action.num}`;
+    case "UPGRADE_CITY_FREE": return `Ciudad marcada a ${name(action.player)}`;
+    case "ADJUST_DEV": return `Ajuste de cartas de desarrollo (${name(action.player)})`;
+    case "ADJUST_STAT": return `Ajuste de ${action.stat === "knightsPlayed" ? "caballeros" : "caminos"} (${name(action.player)})`;
+    case "SET_TITLE": return action.player === null
+      ? `${action.title === "longestRoad" ? "Camino más largo" : "Ejército más grande"}: automático`
+      : `${action.title === "longestRoad" ? "Camino más largo" : "Ejército más grande"} a ${name(action.player)}`;
     case "STEAL": return `${cpName} le robó una carta a ${name(action.victim)}`;
     case "BUILD_ROAD": return `Camino construido por ${cpName}`;
     case "ADD_SETTLEMENT": return `Poblado construido por ${cpName}`;
