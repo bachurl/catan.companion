@@ -192,6 +192,54 @@ console.log("LADRÓN: bloquea un hexágono (num + res), no todo el número:");
   assert(rs.rollCount === 2 && rs.diceTotals[8] === 2, "segunda tirada acumula");
 }
 
+console.log("LADRÓN: dos hexágonos con el MISMO número y recurso (el 8 de 1-2 vs. el 8 de 2-3):");
+{
+  // Tres jugadores, todos con un 8-madera. Pero son DOS hexágonos distintos:
+  // uno toca a Ana y Beto, el otro a Beto y Caro.
+  const start = {
+    type: "START_GAME", ts, mode: "full",
+    players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }, { name: "Caro", ci: 2 }],
+    settlements: {
+      0: [{ hexes: [{ num: "8", res: "madera" }] }],
+      1: [{ hexes: [{ num: "8", res: "madera" }] }],
+      2: [{ hexes: [{ num: "8", res: "madera" }] }],
+    },
+    deck,
+  };
+  const roll8 = { type: "ROLL", ts, d1: 4, d2: 4, manual: true };
+
+  // Ladrón en el 8-madera que toca a Ana y Beto
+  let s2 = replayActions([start, { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [0, 1] }, roll8]);
+  assert(s2.players[0].hand.madera === 0, "Ana bloqueada");
+  assert(s2.players[1].hand.madera === 0, "Beto bloqueado");
+  assert(s2.players[2].hand.madera === 1, "Caro NO bloqueado: es el otro hexágono");
+
+  // El otro 8-madera: toca a Beto y Caro
+  s2 = replayActions([start, { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [1, 2] }, roll8]);
+  assert(s2.players[0].hand.madera === 1, "Ana produce con el otro hexágono bloqueado");
+  assert(s2.players[1].hand.madera === 0, "Beto bloqueado (toca los dos hexágonos)");
+  assert(s2.players[2].hand.madera === 0, "Caro bloqueado");
+
+  // Mover el ladrón: la colocación nueva reemplaza a la anterior
+  s2 = replayActions([start,
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [0, 1] },
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [1, 2] },
+    roll8]);
+  assert(s2.players[0].hand.madera === 1 && s2.players[2].hand.madera === 0, "mover el ladrón libera el hexágono anterior");
+
+  // Sin `players` (o acción vieja): bloquea a todos los que tengan ese hexágono
+  s2 = replayActions([start, { type: "PLACE_ROBBER", ts, num: 8, res: "madera" }, roll8]);
+  assert(totalC(s2.players[0].hand) === 0 && totalC(s2.players[2].hand) === 0, "sin players bloquea a todos (compatibilidad)");
+
+  // Reordenar jugadores mueve los índices del hexágono bloqueado
+  const moved = replayActions([start,
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [0, 1] },
+    { type: "MOVE_PLAYER", ts, idx: 0, dir: 1 },
+    roll8]);
+  assert(moved.players[1].name === "Ana" && moved.players[1].hand.madera === 0, "Ana sigue bloqueada tras reordenar");
+  assert(moved.players[2].name === "Caro" && moved.players[2].hand.madera === 1, "Caro sigue sin bloquear tras reordenar");
+}
+
 console.log("CORRECCIONES: cartas de desarrollo, stats, títulos y ciudades:");
 {
   const fix = [

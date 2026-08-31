@@ -40,6 +40,10 @@ const pushLog = (log, ts, msg) => [{ t: ts, m: msg }, ...log].slice(0, 100);
 // número (y bloqueaban todos los hexágonos de ese número).
 export const robberNum = (robber) => (robber == null ? null : (typeof robber === "object" ? robber.num : robber));
 export const robberRes = (robber) => (robber && typeof robber === "object" ? robber.res : null);
+// Jugadores lindantes al hexágono bloqueado. null = todos los que tengan ese
+// número/recurso (acciones viejas, o cuando no hace falta desambiguar).
+export const robberPlayers = (robber) =>
+  (robber && typeof robber === "object" && Array.isArray(robber.players) ? robber.players : null);
 export const robberLabel = (robber) => {
   const n = robberNum(robber);
   if (n == null) return null;
@@ -48,15 +52,22 @@ export const robberLabel = (robber) => {
 };
 
 // Ganancias por jugador para un número tirado (compartido con la UI para notifs).
-// El ladrón bloquea SOLO su hexágono (número + recurso); sin recurso (acción
-// vieja) bloquea todos los hexágonos de ese número.
+//
+// El ladrón bloquea UN hexágono. La app no tiene modelo del tablero: la
+// producción de cada jugador se guarda por separado, así que dos "8 madera" de
+// jugadores distintos pueden ser el mismo hexágono o dos diferentes. Por eso el
+// hexágono se identifica por número + recurso + a qué jugadores toca: así el 8
+// que bloquea a 1 y 2 no es el mismo que el 8 que bloquea a 2 y 3.
+// Con `res` o `players` en null se cae al comportamiento amplio (todo ese
+// número, o todos los jugadores con ese hexágono).
 export const computeGains = (players, num, robber) => {
-  const rNum = robberNum(robber), rRes = robberRes(robber);
-  return players.map(p => {
+  const rNum = robberNum(robber), rRes = robberRes(robber), rPlayers = robberPlayers(robber);
+  return players.map((p, pi) => {
     const gains = eHand();
+    const blocksPlayer = rNum === num && (rPlayers === null || rPlayers.includes(pi));
     p.productions.forEach(pr => {
       if (pr.num !== num) return;
-      if (rNum === num && (rRes === null || pr.res === rRes)) return; // bloqueado
+      if (blocksPlayer && (rRes === null || pr.res === rRes)) return; // bloqueado
       gains[pr.res] = (gains[pr.res] || 0) + (pr.isCity ? 2 : 1);
     });
     return gains;
@@ -223,9 +234,21 @@ export function gameReducer(state, action) {
     }
 
     case "PLACE_ROBBER": {
-      // payload: { num, res? } — sin res bloquea todos los hexágonos del número
-      const robber = { num: action.num, res: action.res ?? null };
-      return { ...state, robber, log: pushLog(state.log, ts, `🦹 Ladrón colocado en el ${robberLabel(robber)}`) };
+      // payload: { num, res?, players? } — identifica el hexágono. Sin res
+      // bloquea todo el número; sin players, a todos los que lo tengan.
+      const robber = {
+        num: action.num,
+        res: action.res ?? null,
+        players: Array.isArray(action.players) ? action.players : null,
+      };
+      const blocked = robber.players
+        ? robber.players.map(i => state.players[i]?.name).filter(Boolean).join(", ")
+        : null;
+      return {
+        ...state,
+        robber,
+        log: pushLog(state.log, ts, `🦹 Ladrón colocado en el ${robberLabel(robber)}${blocked ? ` (bloquea a ${blocked})` : ""}`),
+      };
     }
 
     case "STEAL": {
@@ -484,13 +507,16 @@ export function gameReducer(state, action) {
       if (newIdx < 0 || newIdx >= state.players.length) return state;
       const players = [...state.players];
       [players[action.idx], players[newIdx]] = [players[newIdx], players[action.idx]];
-      // cp y los títulos manuales referencian asientos: siguen al jugador movido.
+      // cp, los títulos manuales y el hexágono del ladrón referencian asientos:
+      // siguen al jugador movido.
       const follow = (i) => (i === action.idx ? newIdx : i === newIdx ? action.idx : i);
       const titles = {
         longestRoad: state.titles?.longestRoad == null ? null : follow(state.titles.longestRoad),
         largestArmy: state.titles?.largestArmy == null ? null : follow(state.titles.largestArmy),
       };
-      return { ...state, players, cp: follow(state.cp), titles };
+      const rPlayers = robberPlayers(state.robber);
+      const robber = rPlayers === null ? state.robber : { ...state.robber, players: rPlayers.map(follow) };
+      return { ...state, players, cp: follow(state.cp), titles, robber };
     }
 
     case "END_TURN": {

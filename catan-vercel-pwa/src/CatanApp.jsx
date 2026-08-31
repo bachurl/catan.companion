@@ -416,15 +416,29 @@ export default function CatanApp() {
     dispatch({ type: "DISCARD", player: playerIdx, discards });
   };
 
-  const placeRobber = (num, res) => {
-    dispatch({ type: "PLACE_ROBBER", num, res: res ?? null });
-    // Víctimas: quienes producen en ESE hexágono (número + recurso).
-    // Sin recurso elegido, cualquiera con ese número.
+  // Jugadores que producen con ese número (y recurso, si se eligió).
+  const playersOnHex = (num, res) => players
+    .map((p, i) => (p.productions.some(pr => pr.num === num && (!res || pr.res === res)) ? i : -1))
+    .filter(i => i >= 0);
+
+  // Paso 2 → 3: si más de un jugador tiene ese número+recurso, puede haber dos
+  // hexágonos distintos (el 8 de 1 y 2 vs. el 8 de 2 y 3) y hay que preguntar.
+  const chooseRobberRes = (num, res) => {
+    const onHex = playersOnHex(num, res);
+    if (onHex.length <= 1) { placeRobber(num, res, onHex.length ? onHex : null); return; }
+    setModal(m => ({ ...m, res, sel: onHex }));
+  };
+
+  const placeRobber = (num, res, sel) => {
+    const onHex = sel && sel.length ? sel : null;
+    dispatch({ type: "PLACE_ROBBER", num, res: res ?? null, players: onHex });
+    // Víctimas: los lindantes al hexágono bloqueado (menos vos) con cartas.
     const victims = [];
     players.forEach((p, i) => {
       if (i === cp) return;
-      const onHex = p.productions.some(pr => pr.num === num && (!res || pr.res === res));
-      if (onHex && totalC(p.hand) > 0) victims.push(i);
+      if (onHex && !onHex.includes(i)) return;
+      const touches = p.productions.some(pr => pr.num === num && (!res || pr.res === res));
+      if (touches && totalC(p.hand) > 0) victims.push(i);
     });
     if (victims.length > 0) {
       setModal({ type: "steal", victims });
@@ -2238,6 +2252,50 @@ export default function CatanApp() {
               // recursos que realmente están en juego con ese número.
               const inPlay = new Set(players.flatMap(p =>
                 p.productions.filter(pr => pr.num === modal.num).map(pr => pr.res)));
+
+              // Paso 3: varios jugadores comparten ese número+recurso, así que
+              // puede haber dos hexágonos iguales. Se elige a cuáles toca este.
+              if (modal.sel) {
+                const toggle = (i) => setModal(m => ({
+                  ...m,
+                  sel: m.sel.includes(i) ? m.sel.filter(x => x !== i) : [...m.sel, i],
+                }));
+                return (
+                  <div>
+                    <h3 className="text-xl font-bold text-red-400 mb-2">🦹 ¿A quiénes toca ese hexágono?</h3>
+                    <p className="text-slate-300 text-sm mb-1">
+                      Hay varios jugadores con el <b className="text-white">{modal.num} {RM[modal.res]?.e}</b>.
+                    </p>
+                    <p className="text-slate-400 text-xs mb-4">
+                      Si son dos hexágonos distintos, dejá marcados solo los que tocan el que estás bloqueando.
+                    </p>
+                    <div className="space-y-2 mb-4">
+                      {playersOnHex(modal.num, modal.res).map(i => (
+                        <button key={i} onClick={() => toggle(i)}
+                          className={`w-full py-2.5 px-3 rounded-xl flex items-center gap-3 text-sm font-semibold transition-all ${modal.sel.includes(i) ? "bg-red-500/25 ring-1 ring-red-400 text-white" : "bg-slate-700 text-slate-400"}`}>
+                          <span className={`w-5 h-5 rounded flex items-center justify-center text-xs font-black ${modal.sel.includes(i) ? "bg-red-500 text-white" : "bg-slate-600 text-slate-500"}`}>
+                            {modal.sel.includes(i) ? "✓" : ""}
+                          </span>
+                          <span className="w-4 h-4 rounded-full" style={{ backgroundColor: COLORS[players[i].ci].h }} />
+                          <span>{players[i].name}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setModal(m => ({ ...m, res: undefined, sel: undefined }))}
+                        className="py-3 px-4 bg-slate-700 text-slate-300 rounded-xl font-bold text-sm">
+                        ← Atrás
+                      </button>
+                      <button onClick={() => placeRobber(modal.num, modal.res, modal.sel)}
+                        disabled={modal.sel.length === 0}
+                        className="flex-1 py-3 bg-red-500 hover:bg-red-400 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-xl font-bold">
+                        Bloquear
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <div>
                   <h3 className="text-xl font-bold text-red-400 mb-2">🦹 Colocar el ladrón</h3>
@@ -2256,15 +2314,18 @@ export default function CatanApp() {
                     <>
                       <p className="text-slate-400 text-xs mb-2">Hexágono con el <b className="text-white">{modal.num}</b> — recurso:</p>
                       <div className="grid grid-cols-1 gap-2 mb-3">
-                        {RES.map(r => (
-                          <button key={r.id} onClick={() => placeRobber(modal.num, r.id)}
-                            className={`${r.bg} ${r.tx} py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 ${inPlay.has(r.id) ? "ring-2 ring-amber-300" : "opacity-70"}`}>
-                            {r.e} {r.n}
-                            {inPlay.has(r.id) && <span className="text-xs font-semibold">· en juego</span>}
-                          </button>
-                        ))}
+                        {RES.map(r => {
+                          const n = playersOnHex(modal.num, r.id).length;
+                          return (
+                            <button key={r.id} onClick={() => chooseRobberRes(modal.num, r.id)}
+                              className={`${r.bg} ${r.tx} py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 ${inPlay.has(r.id) ? "ring-2 ring-amber-300" : "opacity-70"}`}>
+                              {r.e} {r.n}
+                              {n > 0 && <span className="text-xs font-semibold">· {n} jugador{n === 1 ? "" : "es"}</span>}
+                            </button>
+                          );
+                        })}
                       </div>
-                      <button onClick={() => placeRobber(modal.num, null)}
+                      <button onClick={() => placeRobber(modal.num, null, null)}
                         className="w-full py-2 mb-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-sm">
                         Bloquear todos los {modal.num} (no sé el recurso)
                       </button>
