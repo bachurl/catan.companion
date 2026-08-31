@@ -2,6 +2,7 @@
 // Correr con: npm run test:reducer
 import { gameReducer, initialGameState, replayActions } from "../src/game/reducer.js";
 import { totalC } from "../src/game/constants.js";
+import { mergeWithLocal } from "../src/online/mergeLog.js";
 
 let failures = 0;
 const assert = (cond, msg) => {
@@ -156,6 +157,16 @@ ls = replayActions(lobbyActions);
 assert(ls.players[1].hand.trigo === 1, "el 6 produce para Caro tras empezar");
 assert(replayActions([...lobbyActions, { type: "BEGIN_GAME", ts }]).started === true, "BEGIN_GAME repetido es inofensivo");
 assert(replayActions([...lobbyActions, { type: "SET_INITIAL_SETTLEMENTS", ts, player: 1, settlements: [] }]).players[1].productions.length === 2, "SET_INITIAL_SETTLEMENTS ignorado con partida empezada");
+
+console.log("mergeWithLocal (resync online):");
+{
+  const server = [{ uid: "a", type: "X" }, { uid: "b", type: "Y" }];
+  const merged = mergeWithLocal(server, [{ uid: "b", type: "Y" }, { uid: "c", type: "Z" }, { uid: "c", type: "Z" }]);
+  assert(merged.length === 3 && merged[2].uid === "c", "canónico primero, extra local al final, sin duplicados");
+  assert(mergeWithLocal(server, []).length === 2, "sin extras devuelve el canónico");
+  assert(mergeWithLocal([], [{ uid: "c", type: "Z" }]).length === 1, "server vacío conserva lo local");
+  assert(mergeWithLocal(server, [{ type: "SIN_UID" }]).length === 2, "extra sin uid se descarta");
+}
 
 console.log("Determinismo (replay dos veces = mismo estado):");
 const s1 = JSON.stringify(replayActions(actions));

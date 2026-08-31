@@ -35,6 +35,7 @@ Esto habilita con una sola pieza:
 - [x] **B5** Gating por turno: con jugador reclamado solo se actúa en el turno propio (ingresar/tirar dados, construir, comerciar, jugar cartas, terminar turno). El host puede corregir siempre (ajustes manuales, deshacer, reordenar); un celular sin jugador reclamado controla la mesa completa (fallback si se apaga un teléfono).
 - [x] **B6** UX multi-celular: botón grande "Terminar mi turno", vibración + aviso al empezar tu turno, teclado de dados manual recordado (para dados físicos), compartir código de sala con link `?sala=CODIGO` que precarga el código.
 - [x] **B7** Lobby online: la sala se crea apenas el host elige modo y cantidad (código compartible al instante); cada jugador se une, reclama su asiento, pone nombre/color y carga sus propios poblados iniciales desde su celular; el host (o un celular mesa) comienza la partida. El setup en un solo celular sigue disponible ("Cargar todo en este celular").
+- [x] **B8** Convergencia de sync (issue #24): resync canónico (refetch + merge con acciones locales en vuelo/cola) en cada señal de riesgo — reconexión del canal, vuelta a foreground, recuperar red, evento fuera de orden — más heartbeat periódico. Evita que un celular quede desfasado por eventos Realtime perdidos.
 
 Decisión v1: el creador de la sala carga el setup (nombres, poblados); los demás se unen y juegan.
 
