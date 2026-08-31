@@ -4,6 +4,7 @@ import { gameReducer, initialGameState, replayActions, robberNum, robberRes } fr
 import { totalC } from "../src/game/constants.js";
 import { mergeWithLocal } from "../src/online/mergeLog.js";
 import { computeFinalScores, computeLongestRoad, computeLargestArmy } from "../src/game/selectors.js";
+import { computeMatchStats } from "../src/game/stats.js";
 
 let failures = 0;
 const assert = (cond, msg) => {
@@ -373,6 +374,116 @@ console.log("mergeWithLocal (resync online):");
   assert(mergeWithLocal(server, []).length === 2, "sin extras devuelve el canónico");
   assert(mergeWithLocal([], [{ uid: "c", type: "Z" }]).length === 1, "server vacío conserva lo local");
   assert(mergeWithLocal(server, [{ type: "SIN_UID" }]).length === 2, "extra sin uid se descarta");
+}
+
+console.log("computeMatchStats (estadísticas en vivo):");
+{
+  const base = [{
+    type: "START_GAME", ts, mode: "full",
+    players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }],
+    settlements: {
+      0: [{ hexes: [{ num: "8", res: "madera" }] }, { hexes: [{ num: "6", res: "ladrillo" }] }],
+      1: [{ hexes: [{ num: "8", res: "oveja" }] }, { hexes: [{ num: "10", res: "mineral" }] }],
+    },
+    deck: ["caballero", "victoria"],
+  }];
+
+  // Estado inicial: nada acumulado todavía, pero las estadísticas ya existen.
+  let st = computeMatchStats(base);
+  assert(st.players.length === 2, "una fila de estadísticas por jugador");
+  assert(st.players[0].producedTotal === 0, "sin producción al arrancar");
+  assert(st.players[0].settlementsNow === 2, "Ana arranca con 2 poblados");
+  assert(st.players[0].pips === 5 + 5, "los puntos de dados salen del 8 y el 6");
+  assert(st.rollCount === 0, "sin tiradas");
+
+  // Una tirada de 8: cobran los dos, cada uno lo suyo.
+  const rolled = [...base, { type: "ROLL", ts, d1: 4, d2: 4, manual: false }];
+  st = computeMatchStats(rolled);
+  assert(st.players[0].produced.madera === 1, "Ana cobró 1 madera con el 8");
+  assert(st.players[1].produced.oveja === 1, "Beto cobró 1 oveja con el 8");
+  assert(st.players[0].producedTotal === 1 && st.players[1].producedTotal === 1, "1 carta cada uno");
+  assert(st.players[0].rolls === 1 && st.players[1].rolls === 0, "la tirada es de quien tenía el turno");
+  assert(st.rollCount === 1 && st.dice.rows.find(r => r.n === 8).count === 1, "el 8 figura en la distribución");
+
+  // El ladrón en el 8 de madera: lo que Ana no cobra queda contado como bloqueado.
+  const blocked = [...base,
+    { type: "PLACE_ROBBER", ts, num: 8, res: "madera", players: [0] },
+    { type: "ROLL", ts, d1: 4, d2: 4, manual: false },
+  ];
+  st = computeMatchStats(blocked);
+  assert(st.players[0].produced.madera === 0, "Ana no cobra el hexágono bloqueado");
+  assert(st.players[0].blocked === 1, "el bloqueo se cuenta como recurso perdido");
+  assert(st.players[1].produced.oveja === 1 && st.players[1].blocked === 0, "el ladrón no toca a Beto");
+
+  // Construcciones, compras, comercio y robos.
+  const rich = [...base];
+  for (let i = 0; i < 6; i++) rich.push({ type: "ROLL", ts, d1: 4, d2: 4, manual: false });
+  rich.push({ type: "MANUAL_ADJUST", ts, player: 0, res: "ladrillo", delta: 6 });
+  rich.push({ type: "BUILD_ROAD", ts });
+  rich.push({ type: "TRADE_BANK", ts, give: "madera", receive: "trigo", ratio: 4 });
+  rich.push({ type: "STEAL", ts, victim: 1, res: "oveja" });
+  rich.push({ type: "END_TURN", ts });
+  st = computeMatchStats(rich);
+  assert(st.players[0].roads === 1, "un camino construido");
+  assert(st.players[0].spent === 2, "el camino costó 2 recursos");
+  assert(st.players[0].tradesBank === 1, "un cambio con el banco");
+  assert(st.players[0].stolenFromOthers === 1, "Ana robó una vez");
+  assert(st.players[1].robbedByOthers === 1 && st.players[1].lost === 1, "a Beto le robaron una");
+  assert(st.players[0].turns === 1, "Ana terminó un turno");
+
+  // Una acción rechazada por el reducer (no alcanza para pagar) no cuenta.
+  const broke = [...base, { type: "BUILD_ROAD", ts }];
+  st = computeMatchStats(broke);
+  assert(st.players[0].roads === 0, "una construcción rechazada no se cuenta");
+
+  // Deshacer: las estadísticas vuelven atrás porque salen del log.
+  const undone = [...rolled, { type: "UNDO", ts }];
+  st = computeMatchStats(undone);
+  assert(st.players[0].producedTotal === 0 && st.rollCount === 0, "el undo revierte las estadísticas");
+
+  // La carrera de puntos avanza con las rondas.
+  const rounds = [...base];
+  for (let r = 0; r < 3; r++) { rounds.push({ type: "END_TURN", ts }); rounds.push({ type: "END_TURN", ts }); }
+  st = computeMatchStats(rounds);
+  assert(st.timeline.length >= 3, "la carrera de puntos tiene un punto por ronda");
+  assert(st.timeline.every(t => t.scores.length === 2), "cada punto trae el puntaje de todos");
+  assert(st.timeline[0].scores[0] === 2, "Ana arranca en 2 puntos (2 poblados)");
+  assert(st.timeline[st.timeline.length - 1].round === st.round, "el último punto es la ronda actual");
+
+  // Reordenar asientos mueve las estadísticas con el jugador.
+  const moved = [...rolled,
+    { type: "MANUAL_ADJUST", ts, player: 0, res: "ladrillo", delta: 6 },
+    { type: "BUILD_ROAD", ts },
+    { type: "MOVE_PLAYER", ts, idx: 0, dir: 1 },
+  ];
+  st = computeMatchStats(moved);
+  assert(st.players[1].roads === 1 && st.players[0].roads === 0, "el camino sigue a Ana al asiento 1");
+  assert(st.players[1].produced.madera === 1, "la producción también acompaña el reordenamiento");
+
+  // Correcciones de la mesa: cuentan como construcciones reales.
+  const fixed = [...base,
+    { type: "ADD_FREE_SETTLEMENT", ts, player: 1, hexes: [{ num: "5", res: "trigo" }], isCity: true },
+  ];
+  st = computeMatchStats(fixed);
+  assert(st.players[1].cities === 1 && st.players[1].citiesNow === 1, "una ciudad cargada a mano se cuenta");
+
+  // El 7 no compite como número más/menos salido: no produce recursos.
+  const sevens = [...base,
+    { type: "ROLL", ts, d1: 3, d2: 4, manual: false },
+    { type: "ROLL", ts, d1: 3, d2: 4, manual: false },
+    { type: "ROLL", ts, d1: 3, d2: 4, manual: false },
+  ];
+  st = computeMatchStats(sevens);
+  assert(st.dice.sevens === 3, "los sietes se cuentan aparte");
+  assert(st.dice.hot.n !== 7 && st.dice.cold.n !== 7, "el 7 queda afuera de más/menos salió");
+  assert(st.dice.since7 === 0, "el último 7 fue la tirada más reciente");
+  st = computeMatchStats([...sevens, { type: "ROLL", ts, d1: 3, d2: 3, manual: false }]);
+  assert(st.dice.since7 === 1, "una tirada después del 7");
+  assert(computeMatchStats(rolled).dice.since7 === null, "sin sietes todavía no hay cuenta");
+
+  // Determinismo.
+  assert(JSON.stringify(computeMatchStats(rich)) === JSON.stringify(computeMatchStats(rich)),
+    "las estadísticas son determinísticas");
 }
 
 console.log("Determinismo (replay dos veces = mismo estado):");

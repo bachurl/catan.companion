@@ -54,5 +54,11 @@ assert(f.status === "finished", "estado: terminada");
 assert(f.winnerIndex === 0 && f.winnerName === "Ana", "identifica al ganador");
 assert(f.id === s.id, "mismo id: guardar de nuevo pisa la misma partida");
 
+console.log("Deshacer:");
+// Una tirada deshecha no debe quedar en el resumen ni en la distribución.
+const undone = summarizeGame([...actions, { type: "UNDO", ts: t0 + 700000, uid: "u-undo" }]);
+assert(undone.rollCount === 2 && undone.rolls.length === 2, "UNDO saca la última tirada del resumen");
+assert(!undone.diceTotals[2], "y también de la distribución de números");
+
 console.log(failures === 0 ? "\nTodos los tests OK" : `\n${failures} test(s) fallaron`);
 process.exit(failures === 0 ? 0 : 1);

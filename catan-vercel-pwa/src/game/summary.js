@@ -6,7 +6,7 @@
 //  Es una función pura sobre el log (misma fuente de verdad que el juego),
 //  así el resumen de una partida vieja se puede recalcular sin migraciones.
 // ═══════════════════════════════════════════════
-import { initialGameState, gameReducer } from "./reducer.js";
+import { initialGameState, gameReducer, effectiveActions } from "./reducer.js";
 import { computeScores, computeFinalScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE } from "./selectors.js";
 
 const START_TYPES = new Set(["START_GAME", "CREATE_LOBBY"]);
@@ -24,9 +24,12 @@ const countBuildings = (p) => {
 export const gameIdOf = (actions) => actions.find(a => START_TYPES.has(a.type))?.uid || null;
 
 // Recorre el log una sola vez: estado final + tiradas con su jugador y momento.
-export function summarizeGame(actions) {
-  const id = gameIdOf(actions);
-  if (!id || actions.length === 0) return null;
+export function summarizeGame(rawActions) {
+  const id = gameIdOf(rawActions);
+  if (!id || rawActions.length === 0) return null;
+  // Lo deshecho no cuenta: se resume el log efectivo, igual que replayActions.
+  const actions = effectiveActions(rawActions);
+  if (actions.length === 0) return null;
 
   let state = initialGameState;
   const rolls = [];

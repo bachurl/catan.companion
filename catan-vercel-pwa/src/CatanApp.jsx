@@ -1,13 +1,15 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { STYLE_CSS } from "./styles";
 import { DiceFace, ResBadge } from "./components";
+import StatsPanel, { DiceStats } from "./StatsPanel";
 import {
   RES, RM, NUMS, COSTS, COST_NAMES, COST_EMOJI, INIT_DECK, DC, COLORS,
-  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr, numberProb,
+  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
 } from "./game/constants";
 import { computeGains, replayActions, effectiveActions, robberNum, robberRes, robberLabel } from "./game/reducer";
 import { computeScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
 import { describeAction } from "./game/describe";
+import { computeMatchStats } from "./game/stats";
 import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog";
 import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
 import { useGameHistory } from "./history/useGameHistory";
@@ -142,6 +144,9 @@ export default function CatanApp() {
   const [manualPickerOpen, setManualPickerOpen] = useState(() => loadPrefManual());
   const [modal, setModal] = useState(null);
   const [winner, setWinner] = useState(null);
+  // Ganador ya avisado: "Seguir jugando" cierra el cartel para corregir el
+  // puntaje sin que el efecto lo vuelva a abrir en el próximo render.
+  const winnerAckRef = useRef(null);
   // Modal-level state (lifted to avoid hooks-in-IIFE)
   // El código de sala se puede precargar por URL (?sala=CODIGO) para unirse con un tap.
   const [joinCode, setJoinCode] = useState(() => {
@@ -205,40 +210,21 @@ export default function CatanApp() {
     [players, finalScores],
   );
 
-  // ── ESTADÍSTICAS DE TIRADAS ──
-  // Los conteos vienen acumulados del estado (diceTotals), no del historial
-  // visible, que se recorta a las últimas 24.
-  const diceCounts = useMemo(() => {
-    const c = {};
-    for (let n = 2; n <= 12; n++) c[n] = game.diceTotals?.[n] || 0;
-    return c;
-  }, [game.diceTotals]);
-
-  const diceInsights = useMemo(() => {
-    const total = game.rollCount || 0;
-    const nums = Array.from({ length: 11 }, (_, k) => k + 2);
-    if (total === 0) return { total, rows: [], hot: null, cold: null, since7: 0 };
-    const rows = nums.map(n => {
-      const count = diceCounts[n] || 0;
-      const expected = total * (numberProb(n) / 36); // veces esperadas según probabilidad
-      return { n, count, expected, diff: count - expected };
-    });
-    const sorted = [...rows].sort((a, b) => b.diff - a.diff);
-    const idx7 = diceHistory.indexOf(7);
-    return {
-      total,
-      rows,
-      hot: sorted[0],
-      cold: sorted[sorted.length - 1],
-      // -1 = no hay 7 en el historial visible (últimas 24)
-      since7: idx7 === -1 ? -1 : idx7,
-    };
-  }, [diceCounts, game.rollCount, diceHistory]);
+  // ── ESTADÍSTICAS EN VIVO ──
+  // Se derivan del log de acciones (no de contadores en el estado), así que
+  // acompañan deshacer y resync solos, y una partida retomada muestra el
+  // historial completo hacia atrás. Se recalculan cuando cambia el log.
+  const matchStats = useMemo(() => computeMatchStats(actions), [actions]);
 
   // ── CHECK WIN ──
   useEffect(() => {
     const w = finalScores.findIndex(s => s >= WINNING_SCORE);
-    if (w >= 0 && winner === null) setWinner(w);
+    if (w >= 0 && winner === null && winnerAckRef.current !== w) setWinner(w);
+    // Si el puntaje del avisado cae por debajo de la meta (corrección o undo),
+    // vuelve a estar habilitado para avisar cuando la cruce de nuevo.
+    if (winnerAckRef.current !== null && !(finalScores[winnerAckRef.current] >= WINNING_SCORE)) {
+      winnerAckRef.current = null;
+    }
   }, [finalScores, winner]);
 
   // ── AUTOGUARDADO EN EL HISTORIAL ──
@@ -373,6 +359,7 @@ export default function CatanApp() {
     online.leaveRoom();
     resetGame();
     setWinner(null);
+    winnerAckRef.current = null;
     setSetupPlayers([]);
     setSetupData({});
     setModal(null);
@@ -1479,6 +1466,7 @@ export default function CatanApp() {
     { id: "comerciar", label: "Comerciar", e: "🔄" },
     { id: "cartas", label: "Cartas", e: "🃏", hideInSimple: true },
     { id: "jugadores", label: "Jugadores", e: "👥" },
+    { id: "stats", label: "Stats", e: "📊" },
     { id: "log", label: "Log", e: "📋" },
   ].filter(t => mode.showDevCards || !t.hideInSimple);
 
@@ -1488,13 +1476,38 @@ export default function CatanApp() {
       <div className="flex flex-col flex-1 min-h-screen" style={{position:"relative",zIndex:1}}>
       {/* Winner overlay */}
       {winner !== null && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-800 rounded-3xl p-8 text-center max-w-md border-2 border-amber-500">
-            <div className="text-6xl mb-4">🏆</div>
-            <h2 className="text-3xl font-bold text-amber-400 mb-2">¡{players[winner].name} gana!</h2>
-            <p className="text-slate-300 text-lg mb-6">{finalScores[winner]} puntos de victoria</p>
-            <button onClick={newGame}
-              className="px-6 py-3 bg-amber-500 text-white font-bold rounded-xl">Nueva partida</button>
+        <div className="fixed inset-0 bg-slate-900/95 z-50 overflow-y-auto p-4">
+          <div className="max-w-2xl mx-auto my-4">
+            <div className="bg-slate-800 rounded-3xl p-6 text-center border-2 border-amber-500 mb-4">
+              <div className="text-6xl mb-3">🏆</div>
+              <h2 className="text-3xl font-bold text-amber-400 mb-1">¡{players[winner].name} gana!</h2>
+              <p className="text-slate-300 text-lg">{finalScores[winner]} puntos de victoria</p>
+              <p className="text-slate-500 text-xs mt-2">Ronda {turn} · {matchStats.rollCount} tiradas</p>
+              <div className="flex flex-col sm:flex-row gap-2 justify-center mt-5">
+                <button onClick={() => { winnerAckRef.current = winner; setWinner(null); }}
+                  className="px-5 py-3 bg-slate-700 text-slate-200 font-bold rounded-xl">
+                  Seguir jugando
+                </button>
+                <button onClick={newGame}
+                  className="px-6 py-3 bg-amber-500 text-white font-bold rounded-xl">Nueva partida</button>
+              </div>
+              <p className="text-slate-500 text-[11px] mt-3">
+                &#34;Seguir jugando&#34; vuelve a la partida: útil si el puntaje necesita una corrección.
+              </p>
+            </div>
+
+            {/* Las mismas estadísticas que estuvieron disponibles toda la partida */}
+            <StatsPanel
+              stats={matchStats}
+              players={players}
+              finalScores={finalScores}
+              scoreOrder={scoreOrder}
+              longestRoad={longestRoad}
+              largestArmy={largestArmy}
+              diceHistory={diceHistory}
+              winningScore={WINNING_SCORE}
+              showDice
+            />
           </div>
         </div>
       )}
@@ -1697,71 +1710,8 @@ export default function CatanApp() {
 
               </div>
 
-              {/* Historial y estadísticas de tiradas (acumulado de toda la partida) */}
-              <div className="bg-slate-800 rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-slate-300 font-semibold">Tiradas</h3>
-                  <span className="text-slate-500 text-xs">Ronda {turn} · {diceInsights.total} tirada{diceInsights.total === 1 ? "" : "s"}</span>
-                </div>
-                {diceInsights.total === 0 ? (
-                  <p className="text-slate-500 text-sm">Todavía no hay tiradas en esta partida.</p>
-                ) : (() => {
-                  const H = 56;
-                  const max = Math.max(1, ...diceInsights.rows.map(r => Math.max(r.count, r.expected)));
-                  return (
-                    <>
-                      <div className="flex flex-wrap gap-2 mb-4">
-                        {diceHistory.slice(0, 12).map((n, i) => (
-                          <span key={i} className={`px-3 py-1 rounded-full text-sm font-bold ${i === 0 ? "bg-amber-500 text-white" : "bg-slate-700 text-slate-200"}`}>
-                            {n}
-                          </span>
-                        ))}
-                      </div>
-
-                      {/* Barra = veces que salió. Línea punteada = veces esperadas
-                          según la probabilidad real de cada número. */}
-                      <div className="grid grid-cols-11 gap-1 items-end">
-                        {diceInsights.rows.map(({ n, count, expected }) => (
-                          <div key={n} className="flex flex-col items-center gap-1">
-                            <div style={{ position: "relative", width: "100%", height: H }}
-                              title={`${n}: salió ${count} · esperado ${expected.toFixed(1)}`}>
-                              <div style={{
-                                position: "absolute", bottom: 0, left: 0, right: 0,
-                                height: Math.max(2, (count / max) * H), borderRadius: 4,
-                                background: n === 7 ? "#b94a3c" : count > expected ? "#d4a853" : "#475569",
-                              }} />
-                              <div style={{
-                                position: "absolute", bottom: (expected / max) * H, left: -1, right: -1,
-                                borderTop: "1px dashed rgba(240,230,211,.5)",
-                              }} />
-                            </div>
-                            <span className="text-[10px] text-slate-400">{n}</span>
-                            <span className="text-[9px] text-slate-500">{count}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2 mt-4">
-                        {[
-                          { l: "Más salió", v: diceInsights.hot ? `${diceInsights.hot.n}` : "—", s: diceInsights.hot ? `${diceInsights.hot.count} veces` : "" },
-                          { l: "Menos salió", v: diceInsights.cold ? `${diceInsights.cold.n}` : "—", s: diceInsights.cold ? `${diceInsights.cold.count} veces` : "" },
-                          { l: "Sin 7 hace", v: diceInsights.since7 === -1 ? "12+" : `${diceInsights.since7}`, s: "tiradas" },
-                        ].map(({ l, v, s }) => (
-                          <div key={l} className="bg-slate-700/40 rounded-xl py-2 text-center">
-                            <div className="text-slate-400 text-[10px] uppercase tracking-wider">{l}</div>
-                            <div className="text-amber-300 text-xl font-black">{v}</div>
-                            <div className="text-slate-500 text-[10px]">{s}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-slate-500 text-xs mt-3">
-                        La línea punteada es lo esperado por probabilidad (6 y 8 son los más probables). Ojo: los dados no tienen memoria —
-                        que un número venga frío no lo hace más probable en la próxima.
-                      </p>
-                    </>
-                  );
-                })()}
-              </div>
+              {/* Tiradas: mismo componente que el tab de estadísticas, en vivo */}
+              <DiceStats dice={matchStats.dice} round={turn} history={diceHistory} />
 
               {/* Current player hand (o la mano reclamada en una sala online) */}
               {(() => {
@@ -2135,6 +2085,23 @@ export default function CatanApp() {
           )}
 
           {/* ── LOG ── */}
+          {/* ── STATS ── */}
+          {/* En vivo durante toda la partida: es el mismo panel que se muestra
+              al terminar, no una pantalla de cierre. */}
+          {tab === "stats" && (
+            <StatsPanel
+              stats={matchStats}
+              players={players}
+              finalScores={finalScores}
+              scoreOrder={scoreOrder}
+              longestRoad={longestRoad}
+              largestArmy={largestArmy}
+              diceHistory={diceHistory}
+              winningScore={WINNING_SCORE}
+              showDice
+            />
+          )}
+
           {tab === "log" && (
             <div className="space-y-1">
               {log.length === 0 ? (
