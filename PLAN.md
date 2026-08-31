@@ -59,9 +59,24 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
   carrera de puntos por ronda, producción por jugador y recurso, detalle por jugador (dados, bloqueos del
   ladrón, comercios, robos) y distribución de tiradas vs. lo esperado. Se derivan del log de acciones, así que
   acompañan deshacer/resync y las partidas ya guardadas muestran el historial completo hacia atrás.
-- [ ] **C1b** Historial de partidas terminadas (guardar y volver a ver partidas anteriores).
-- [ ] **C2** Error reporting (Sentry o similar) + analytics básico, meta tags/OG, dominio.
-- [ ] **C3** QA en dispositivos reales + Lighthouse.
+- [x] **C1b** Historial de partidas terminadas: cada partida ganada se archiva con su log completo
+  (últimas 20, en el dispositivo) y se puede reabrir con las mismas estadísticas que se vieron jugando.
+  Antes una partida terminada se descartaba en silencio al recargar.
+- [x] **C2** Meta tags + Open Graph (imagen propia en `public/og.png`, URL absoluta resuelta en build).
+  Diagnóstico: los errores se registran en el dispositivo y se pueden copiar desde la app; con
+  `VITE_ERROR_ENDPOINT` / `VITE_ANALYTICS_ENDPOINT` además se envían, y sin ellas no se hace ninguna
+  request ni entra ningún tercero.
+- [x] **C3** Lighthouse mobile: accesibilidad 75 → **100**, best-practices 96 → **100**, SEO 91 → **100**,
+  performance **98**. Cero violaciones de axe-core (WCAG 2.1 AA) en las 13 pantallas de la app.
+
+### Pendiente de Fase C
+
+- [ ] **C2b** Dominio propio (comprarlo y apuntarlo en Vercel). Con `SITE_URL` seteada, la imagen de
+  Open Graph lo toma sola.
+- [ ] **C2c** Si se quiere recibir los errores: levantar un endpoint (o poner Sentry) y setear
+  `VITE_ERROR_ENDPOINT`. Hoy el registro es local.
+- [ ] **C3b** QA en dispositivos reales: sigue siendo lo único que no se puede automatizar desde acá
+  (iOS/Android reales, PWA instalada, pantalla que no se apaga, vibración, 2+ celulares en una sala).
 
 ## Completado
 
@@ -72,10 +87,18 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
 - [x] Reordenar jugadores / orden de turnos en setup y en juego (PR #6)
 - [x] Alerta de descartes al salir 7 + badge de mano >7 cartas (PR #7)
 
-## Pendiente de acción manual (bloqueante para online)
+## Configuración (estado real)
 
-1. Crear proyecto Supabase (gratis) — pasos en `catan-vercel-pwa/.env.example`
-2. Correr `catan-vercel-pwa/supabase/schema.sql` en el SQL Editor
-3. Habilitar Anonymous sign-ins (Authentication → Providers)
-4. Setear `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` en Vercel
-5. QA con 2 dispositivos reales (crear sala / unirse / sync / cola offline / undo remoto)
+Supabase está en producción desde las partidas del 30/8: las salas online, el sync entre celulares y
+la cola offline funcionan, y los logs de partidas quedan en la tabla de acciones. El desfase de
+sincronización que apareció jugando se corrigió en el PR #35 (issue #24).
+
+- [x] Proyecto Supabase creado, `supabase/schema.sql` corrido, anonymous sign-ins habilitado
+- [x] `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` seteadas en Vercel
+- [x] Proyecto Vercel duplicado (`bachurl-catan.companion`) borrado — fallaba en cada deploy porque
+      apuntaba a la raíz del repo, donde no hay `package.json`, y mandaba un mail de error por push
+- [ ] `ANTHROPIC_API_KEY` en Vercel — sin ella el consultor de reglas (❓ Reglas) se reporta no
+      disponible y el resto de la app anda igual
+- [ ] QA con 2 dispositivos reales (crear sala / unirse / sync / cola offline / undo remoto)
+
+Todas las variables están documentadas en `catan-vercel-pwa/.env.example`.
