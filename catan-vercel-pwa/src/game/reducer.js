@@ -1,4 +1,4 @@
-import { COSTS, RM, GAME_MODES, eHand, totalC, afford } from "./constants.js";
+import { COSTS, RM, DC, GAME_MODES, eHand, totalC, afford } from "./constants.js";
 
 // ═══════════════════════════════════════════════
 //  ESTADO DEL JUEGO — event sourcing
@@ -22,8 +22,11 @@ export const initialGameState = {
   turnPhase: "preroll",
   dice: [0, 0],
   deck: [],
-  robber: null, // número bloqueado
-  turn: 1,
+  robber: null, // { num, res } — res null = bloquea todo el número (acciones viejas)
+  turn: 1, // ronda (avanza al completar la vuelta)
+  rollCount: 0, // tiradas totales de la partida
+  diceTotals: {}, // { 2..12: veces } acumulado sin recorte
+  titles: { longestRoad: null, largestArmy: null }, // override manual (null = automático)
   diceHistory: [], // sums, newest first
   lastDistribution: null, // { num, lines: [{ci,name,items}] }
   log: [], // [{t, m}] newest first
@@ -32,16 +35,28 @@ export const initialGameState = {
 
 const pushLog = (log, ts, msg) => [{ t: ts, m: msg }, ...log].slice(0, 100);
 
-// Ganancias por jugador para un número tirado (compartido con la UI para notifs)
+// El ladrón se guarda como { num, res }; las acciones viejas traían solo el
+// número (y bloqueaban todos los hexágonos de ese número).
+export const robberNum = (robber) => (robber == null ? null : (typeof robber === "object" ? robber.num : robber));
+export const robberRes = (robber) => (robber && typeof robber === "object" ? robber.res : null);
+export const robberLabel = (robber) => {
+  const n = robberNum(robber);
+  if (n == null) return null;
+  const r = robberRes(robber);
+  return r ? `${n} ${RM[r]?.e || ""}` : `${n}`;
+};
+
+// Ganancias por jugador para un número tirado (compartido con la UI para notifs).
+// El ladrón bloquea SOLO su hexágono (número + recurso); sin recurso (acción
+// vieja) bloquea todos los hexágonos de ese número.
 export const computeGains = (players, num, robber) => {
-  if (num === robber) return players.map(() => eHand());
+  const rNum = robberNum(robber), rRes = robberRes(robber);
   return players.map(p => {
     const gains = eHand();
     p.productions.forEach(pr => {
-      if (pr.num === num) {
-        const amt = pr.isCity ? 2 : 1;
-        gains[pr.res] = (gains[pr.res] || 0) + amt;
-      }
+      if (pr.num !== num) return;
+      if (rNum === num && (rRes === null || pr.res === rRes)) return; // bloqueado
+      gains[pr.res] = (gains[pr.res] || 0) + (pr.isCity ? 2 : 1);
     });
     return gains;
   });
@@ -155,31 +170,29 @@ export function gameReducer(state, action) {
       let lastDistribution = state.lastDistribution;
 
       if (sum !== 7) {
-        if (sum === state.robber) {
-          log = pushLog(log, ts, `⛔ Ladrón bloquea el ${sum}`);
-          lastDistribution = { num: sum, lines: [] };
-        } else {
-          const gainsByPlayer = computeGains(players, sum, state.robber);
-          players = players.map((p, i) => {
-            const gains = gainsByPlayer[i];
-            const newHand = { ...p.hand };
-            Object.entries(gains).forEach(([r, v]) => { newHand[r] += v; });
-            return { ...p, hand: newHand };
-          });
-          const lines = [];
-          gainsByPlayer.forEach((gains, i) => {
-            const items = Object.entries(gains)
-              .filter(([, v]) => v > 0)
-              .map(([r, v]) => `+${v} ${RM[r].e} ${RM[r].n}`)
-              .join(" ");
-            if (items) {
-              lines.push({ ci: state.players[i].ci, name: state.players[i].name, items });
-              log = pushLog(log, ts, `📦 ${state.players[i].name}: ${items}`);
-            }
-          });
-          if (lines.length === 0) log = pushLog(log, ts, `📦 Nadie produce con el ${sum}`);
-          lastDistribution = { num: sum, lines };
+        if (robberNum(state.robber) === sum) {
+          log = pushLog(log, ts, `⛔ Ladrón bloquea el ${robberLabel(state.robber)}`);
         }
+        const gainsByPlayer = computeGains(players, sum, state.robber);
+        players = players.map((p, i) => {
+          const gains = gainsByPlayer[i];
+          const newHand = { ...p.hand };
+          Object.entries(gains).forEach(([r, v]) => { newHand[r] += v; });
+          return { ...p, hand: newHand };
+        });
+        const lines = [];
+        gainsByPlayer.forEach((gains, i) => {
+          const items = Object.entries(gains)
+            .filter(([, v]) => v > 0)
+            .map(([r, v]) => `+${v} ${RM[r].e} ${RM[r].n}`)
+            .join(" ");
+          if (items) {
+            lines.push({ ci: state.players[i].ci, name: state.players[i].name, items });
+            log = pushLog(log, ts, `📦 ${state.players[i].name}: ${items}`);
+          }
+        });
+        if (lines.length === 0) log = pushLog(log, ts, `📦 Nadie produce con el ${sum}`);
+        lastDistribution = { num: sum, lines };
       }
 
       return {
@@ -187,6 +200,8 @@ export function gameReducer(state, action) {
         players,
         dice: [d1, d2],
         diceHistory: [sum, ...state.diceHistory].slice(0, 24),
+        rollCount: (state.rollCount || 0) + 1,
+        diceTotals: { ...state.diceTotals, [sum]: (state.diceTotals?.[sum] || 0) + 1 },
         turnPhase: "rolled",
         lastDistribution,
         log,
@@ -205,8 +220,11 @@ export function gameReducer(state, action) {
       return { ...state, players, log: pushLog(state.log, ts, `🗑️ ${state.players[action.player].name} descartó ${items}`) };
     }
 
-    case "PLACE_ROBBER":
-      return { ...state, robber: action.num, log: pushLog(state.log, ts, `🦹 Ladrón colocado en el ${action.num}`) };
+    case "PLACE_ROBBER": {
+      // payload: { num, res? } — sin res bloquea todos los hexágonos del número
+      const robber = { num: action.num, res: action.res ?? null };
+      return { ...state, robber, log: pushLog(state.log, ts, `🦹 Ladrón colocado en el ${robberLabel(robber)}`) };
+    }
 
     case "STEAL": {
       // payload: { victim, res } — res elegido al azar en el dispatch
@@ -260,10 +278,15 @@ export function gameReducer(state, action) {
     }
 
     case "BUY_DEV": {
+      // payload: { card? } — con mazo físico se elige la carta que salió;
+      // sin `card` se toma el tope del mazo virtual (acciones viejas).
       const cost = COSTS.desarrollo;
-      if (state.deck.length === 0) return state;
+      const card = action.card ?? state.deck[0];
+      if (!card) return state; // mazo virtual vacío y sin carta explícita
       if (mode.enforceCosts && !afford(state.players[state.cp].hand, cost)) return state;
-      const card = state.deck[0];
+      // Descuenta esa carta del mazo virtual si todavía figuraba.
+      const di = state.deck.indexOf(card);
+      const deck = di >= 0 ? [...state.deck.slice(0, di), ...state.deck.slice(di + 1)] : state.deck;
       const players = state.players.map((p, i) => {
         if (i !== state.cp) return p;
         return {
@@ -273,7 +296,7 @@ export function gameReducer(state, action) {
           devCardBought: [...p.devCardBought, card],
         };
       });
-      return { ...state, players, deck: state.deck.slice(1), log: pushLog(state.log, ts, `🃏 ${state.players[state.cp].name} compró carta de desarrollo`) };
+      return { ...state, players, deck, log: pushLog(state.log, ts, `🃏 ${state.players[state.cp].name} compró ${DC[card]?.e || ""} ${DC[card]?.n || "carta de desarrollo"}`) };
     }
 
     case "PLAY_DEV": {
@@ -374,13 +397,65 @@ export function gameReducer(state, action) {
     }
 
     case "ADD_FREE_SETTLEMENT": {
-      // payload: { player, hexes }
+      // payload: { player, hexes, isCity? } — corrección sin costo
       const { prods, nextId } = buildProductions(action.hexes, state.nextId);
+      const finalProds = action.isCity ? prods.map(pr => ({ ...pr, isCity: true })) : prods;
       const players = state.players.map((p, i) => {
         if (i !== action.player) return p;
-        return { ...p, productions: [...p.productions, ...prods] };
+        return { ...p, productions: [...p.productions, ...finalProds] };
       });
-      return { ...state, players, nextId, log: pushLog(state.log, ts, `🏠 Se agregó un poblado a ${state.players[action.player].name}`) };
+      return { ...state, players, nextId, log: pushLog(state.log, ts, `${action.isCity ? "🏙️ Se agregó una ciudad" : "🏠 Se agregó un poblado"} a ${state.players[action.player].name}`) };
+    }
+
+    case "UPGRADE_CITY_FREE": {
+      // payload: { player, gid } — corrección sin costo, para cualquier jugador
+      const players = state.players.map((p, i) => {
+        if (i !== action.player) return p;
+        return { ...p, productions: p.productions.map(pr => pr.gid === action.gid ? { ...pr, isCity: true } : pr) };
+      });
+      return { ...state, players, log: pushLog(state.log, ts, `🏙️ ${state.players[action.player].name}: poblado marcado como ciudad`) };
+    }
+
+    case "ADJUST_DEV": {
+      // payload: { player, card, delta } — corrección de cartas de desarrollo
+      // (el mazo físico de la mesa manda sobre el mazo virtual).
+      let changed = false;
+      const players = state.players.map((p, i) => {
+        if (i !== action.player) return p;
+        const dc = [...p.devCards];
+        if (action.delta > 0) { dc.push(action.card); changed = true; }
+        else {
+          const idx = dc.lastIndexOf(action.card);
+          if (idx === -1) return p;
+          dc.splice(idx, 1);
+          changed = true;
+        }
+        return { ...p, devCards: dc };
+      });
+      if (!changed) return state;
+      const verb = action.delta > 0 ? "+1" : "−1";
+      return { ...state, players, log: pushLog(state.log, ts, `🃏 ${state.players[action.player].name}: ${verb} ${DC[action.card]?.e || ""} ${DC[action.card]?.n || action.card}`) };
+    }
+
+    case "ADJUST_STAT": {
+      // payload: { player, stat: "knightsPlayed" | "roadsBuilt", delta }
+      if (action.stat !== "knightsPlayed" && action.stat !== "roadsBuilt") return state;
+      const players = state.players.map((p, i) =>
+        i !== action.player ? p : ({ ...p, [action.stat]: Math.max(0, p[action.stat] + action.delta) }));
+      return { ...state, players };
+    }
+
+    case "SET_TITLE": {
+      // payload: { title: "longestRoad" | "largestArmy", player: idx | null }
+      // null vuelve al cálculo automático.
+      if (action.title !== "longestRoad" && action.title !== "largestArmy") return state;
+      const titles = { ...state.titles, [action.title]: action.player };
+      const emoji = action.title === "longestRoad" ? "🛤️" : "⚔️";
+      const label = action.title === "longestRoad" ? "Camino más largo" : "Ejército más grande";
+      const msg = action.player === null
+        ? `${emoji} ${label}: vuelve al cálculo automático`
+        : `${emoji} ${label} asignado a ${state.players[action.player]?.name}`;
+      return { ...state, titles, log: pushLog(state.log, ts, msg) };
     }
 
     case "MANUAL_ADJUST": {
@@ -400,10 +475,13 @@ export function gameReducer(state, action) {
       if (newIdx < 0 || newIdx >= state.players.length) return state;
       const players = [...state.players];
       [players[action.idx], players[newIdx]] = [players[newIdx], players[action.idx]];
-      let cp = state.cp;
-      if (cp === action.idx) cp = newIdx;
-      else if (cp === newIdx) cp = action.idx;
-      return { ...state, players, cp };
+      // cp y los títulos manuales referencian asientos: siguen al jugador movido.
+      const follow = (i) => (i === action.idx ? newIdx : i === newIdx ? action.idx : i);
+      const titles = {
+        longestRoad: state.titles?.longestRoad == null ? null : follow(state.titles.longestRoad),
+        largestArmy: state.titles?.largestArmy == null ? null : follow(state.titles.largestArmy),
+      };
+      return { ...state, players, cp: follow(state.cp), titles };
     }
 
     case "END_TURN": {
