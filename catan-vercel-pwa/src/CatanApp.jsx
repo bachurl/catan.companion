@@ -10,6 +10,7 @@ import { computeScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, i
 import { describeAction } from "./game/describe";
 import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog";
 import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
+import { useGameHistory } from "./history/useGameHistory";
 import { useWakeLock, vibrate } from "./useWakeLock";
 
 // Acciones de juego que solo despacha el jugador de turno (o un celular "mesa"
@@ -60,6 +61,11 @@ export default function CatanApp() {
     onRemoteAction: dispatchAction,
     onResync: replaceActions,
   });
+
+  // ── HISTORIAL DE PARTIDAS ──
+  const history = useGameHistory();
+  const [histSel, setHistSel] = useState(null);   // partida abierta en el detalle
+  const [histRolls, setHistRolls] = useState([]); // tiradas de esa partida
 
   const [notif, setNotif] = useState(null);
   const notifTimer = useRef(null);
@@ -234,6 +240,18 @@ export default function CatanApp() {
     const w = finalScores.findIndex(s => s >= WINNING_SCORE);
     if (w >= 0 && winner === null) setWinner(w);
   }, [finalScores, winner]);
+
+  // ── AUTOGUARDADO EN EL HISTORIAL ──
+  // Cada cambio del log actualiza el resumen de la partida (el hook corta la
+  // escritura para no guardar en cada acción); al haber ganador se fuerza.
+  const saveHistory = history.saveGame;
+  const seatOwners = useMemo(() => Object.fromEntries(
+    online.members.filter(m => m.player_index != null).map(m => [m.player_index, m.user_id])
+  ), [online.members]);
+  useEffect(() => {
+    if (actions.length === 0 || !(game.started || game.inLobby)) return;
+    saveHistory(actions, { roomCode: online.room?.code || null, seatOwners, force: winner !== null });
+  }, [actions, game.started, game.inLobby, winner, online.room, seatOwners, saveHistory]);
 
   // ── AVISO DE TURNO ──
   // En sala online con jugador reclamado: vibración + notificación cuando
@@ -788,6 +806,146 @@ export default function CatanApp() {
     showNotif("↩️ Última acción deshecha");
   };
 
+  // ── MIS PARTIDAS ──
+  const openHistory = async () => {
+    setHistSel(null);
+    setPhase("history");
+    history.refresh();
+  };
+  const openHistoryGame = async (g) => {
+    setHistSel(g);
+    setHistRolls(await history.getRolls(g));
+  };
+
+  // ═══════════════════════════════════════════════
+  //  RENDER: MIS PARTIDAS
+  //  Historial local (siempre) + partidas sincronizadas desde la nube.
+  // ═══════════════════════════════════════════════
+  if (phase === "history") {
+    const fmtDate = (ms) => ms ? new Date(ms).toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+    const fmtDur = (sec) => {
+      if (!sec && sec !== 0) return "—";
+      const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+      return h > 0 ? `${h} h ${m} min` : `${m} min`;
+    };
+    const totals = histSel?.diceTotals || {};
+    const maxTotal = Math.max(1, ...NUMS.concat([7]).map(n => totals[n] || 0));
+
+    return (
+      <div className="catan-app p-4">
+        <style>{STYLE_CSS}</style>
+        <div className="catan-container" style={{maxWidth:560,margin:"0 auto"}}>
+          <div className="flex items-center gap-3 mb-4">
+            <button onClick={() => (histSel ? setHistSel(null) : setPhase("mode"))}
+              className="text-slate-400 hover:text-slate-200 text-2xl leading-none">←</button>
+            <h1 className="text-2xl font-black text-amber-400">{histSel ? "Detalle de partida" : "Mis partidas"}</h1>
+          </div>
+
+          {!histSel && (
+            <>
+              <div className="bg-slate-900/80 rounded-2xl p-4 border border-slate-700/60 mb-4">
+                <label className="block text-xs font-bold text-slate-400 mb-1">TU NOMBRE (para identificarte en las partidas)</label>
+                <input value={history.profileName} onChange={e => history.setProfileName(e.target.value)}
+                  placeholder="Ej: Lucas"
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-white focus:border-amber-500 focus:outline-none" />
+                <p className="text-slate-500 text-xs mt-2">Sin cuenta ni contraseña: este dispositivo queda identificado y sus partidas se guardan solas.</p>
+              </div>
+
+              {history.loading && <p className="text-slate-400 text-sm mb-3">Cargando partidas…</p>}
+              {history.games.length === 0 && !history.loading && (
+                <div className="bg-slate-900/80 rounded-2xl p-6 border border-slate-700/60 text-center">
+                  <p className="text-4xl mb-2">📜</p>
+                  <p className="text-slate-300 font-semibold mb-1">Todavía no hay partidas</p>
+                  <p className="text-slate-500 text-sm">Cuando juegues una, queda acá con sus tiradas y resultados.</p>
+                </div>
+              )}
+
+              <div className="space-y-3">
+                {history.games.map(g => (
+                  <button key={g.id} onClick={() => openHistoryGame(g)}
+                    className="w-full text-left bg-slate-900/80 hover:bg-slate-800/80 rounded-2xl p-4 border border-slate-700/60 hover:border-amber-600/50 transition-all">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-bold text-amber-300">
+                        {g.status === "finished" ? `🏆 ${g.winnerName || "—"}` : g.status === "lobby" ? "🕓 Sala en preparación" : "⏳ En curso"}
+                      </span>
+                      <span className="text-xs text-slate-500">{fmtDate(g.endedAt || g.startedAt)}</span>
+                    </div>
+                    <p className="text-slate-300 text-sm mb-1">{(g.players || []).map(p => p.name).join(", ") || `${g.playerCount} jugadores`}</p>
+                    <p className="text-slate-500 text-xs">
+                      {fmtDur(g.durationSeconds)} · {g.turns || 0} rondas · {g.rollCount || 0} tiradas
+                      {g.roomCode ? ` · sala ${g.roomCode}` : ""}
+                      {g.remote ? " · ☁️" : ""}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {histSel && (
+            <div className="space-y-4">
+              <div className="bg-slate-900/80 rounded-2xl p-4 border border-slate-700/60">
+                <p className="text-slate-400 text-xs mb-2">{fmtDate(histSel.startedAt)} · modo {histSel.mode === "simple" ? "Simple" : "Completo"}{histSel.expansion ? " · 5-6 jugadores" : ""}{histSel.roomCode ? ` · sala ${histSel.roomCode}` : ""}</p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div><p className="text-2xl font-black text-amber-300">{fmtDur(histSel.durationSeconds)}</p><p className="text-xs text-slate-500">duración</p></div>
+                  <div><p className="text-2xl font-black text-amber-300">{histSel.turns || 0}</p><p className="text-xs text-slate-500">rondas</p></div>
+                  <div><p className="text-2xl font-black text-amber-300">{histSel.rollCount || 0}</p><p className="text-xs text-slate-500">tiradas</p></div>
+                </div>
+              </div>
+
+              <div className="bg-slate-900/80 rounded-2xl p-4 border border-slate-700/60">
+                <h3 className="font-bold text-amber-200 mb-3">Jugadores</h3>
+                <div className="space-y-2">
+                  {[...(histSel.players || [])].sort((a, b) => (b.vp || 0) - (a.vp || 0)).map(p => (
+                    <div key={p.playerIndex} className="flex items-center gap-3">
+                      <span className="w-3 h-3 rounded-full shrink-0" style={{background: COLORS[p.colorIndex]?.h || "#64748b"}} />
+                      <span className="flex-1 text-slate-200 font-semibold text-sm">
+                        {p.name}
+                        {p.playerIndex === histSel.winnerIndex && " 👑"}
+                        {p.longestRoad && " 🛤️"}
+                        {p.largestArmy && " ⚔️"}
+                      </span>
+                      <span className="text-slate-400 text-xs">🏠{p.settlements} 🏙️{p.cities} ⚔️{p.knights}</span>
+                      <span className="text-amber-300 font-black w-8 text-right">{p.vp}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-900/80 rounded-2xl p-4 border border-slate-700/60">
+                <h3 className="font-bold text-amber-200 mb-3">Números que salieron</h3>
+                <div className="space-y-1.5">
+                  {[2,3,4,5,6,7,8,9,10,11,12].map(n => {
+                    const v = totals[n] || 0;
+                    return (
+                      <div key={n} className="flex items-center gap-2">
+                        <span className="w-6 text-right text-xs font-bold text-slate-400">{n}</span>
+                        <div className="flex-1 h-4 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full" style={{width:`${(v / maxTotal) * 100}%`, background: n === 7 ? "#ef4444" : "#d4a853"}} />
+                        </div>
+                        <span className="w-6 text-xs text-slate-400">{v}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {histRolls.length > 0 && (
+                  <p className="text-slate-500 text-xs mt-3">
+                    Secuencia: {histRolls.slice(-24).map(r => r.total).join(" · ")}
+                  </p>
+                )}
+              </div>
+
+              <button onClick={() => { history.deleteGame(histSel.id); setHistSel(null); }}
+                className="w-full py-2.5 text-red-400 hover:text-red-300 text-sm font-semibold">
+                Quitar del historial de este dispositivo
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ═══════════════════════════════════════════════
   //  RENDER: SETUP - MODE
   // ═══════════════════════════════════════════════
@@ -855,6 +1013,11 @@ export default function CatanApp() {
           <button onClick={() => setPhase("count")}
             className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-white font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
             Siguiente →
+          </button>
+
+          <button onClick={openHistory}
+            className="w-full mt-3 py-2.5 text-slate-300 hover:text-amber-300 font-semibold text-sm">
+            📜 Mis partidas
           </button>
 
           {online.isConfigured && (

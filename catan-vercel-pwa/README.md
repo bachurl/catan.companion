@@ -28,10 +28,30 @@ Requiere un proyecto Supabase. Pasos en [.env.example](.env.example):
 
 1. Crear proyecto en supabase.com
 2. Correr [supabase/schema.sql](supabase/schema.sql) en el SQL Editor
+   (y [supabase/history.sql](supabase/history.sql) para el historial de partidas)
 3. Habilitar Anonymous sign-ins (Authentication → Providers)
 4. Setear `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (sin marcar "Sensitive" en Vercel)
 
 Sin esas variables la app funciona en modo local/offline y el UI online queda oculto.
+
+## Mis partidas (historial)
+
+Cada partida se guarda sola: identificador estable, jugadores, puntajes finales,
+duración, rondas y todas las tiradas con su número y de quién fue. Se entra desde
+**📜 Mis partidas** en la pantalla inicial.
+
+- **Sin Supabase**: el historial vive en localStorage (`catan.historial.v1`), solo en
+  ese dispositivo.
+- **Con Supabase**: además se sincroniza a las tablas de
+  [supabase/history.sql](supabase/history.sql) (`games`, `game_players`, `game_rolls`,
+  `game_participants`, `profiles`).
+
+**Sin login**: la sesión anónima de Supabase identifica al dispositivo (`auth.uid()`)
+y el nombre visible se elige en la misma pantalla. Cada uno ve solo las partidas que
+jugó. Si más adelante se agrega login real, se linkea contra el mismo uid.
+
+El resumen se deriva del log con `summarizeGame` (`src/game/summary.js`), así que
+guardar dos veces la misma partida reescribe las mismas filas en vez de duplicarlas.
 
 ## Consultor de reglas con IA (opcional)
 
@@ -54,3 +74,5 @@ replay es determinístico. Sobre esa base:
 - **Deshacer**: marcador `UNDO` en el log
 - **Online**: el log se replica en Supabase y Realtime lo broadcastea
   (`src/online/useOnlineRoom.js`), con cola offline que resincroniza al reconectar
+- **Historial**: `summarizeGame` deriva el resumen del log y `src/history/` lo guarda
+  local y (si está configurado) en Supabase

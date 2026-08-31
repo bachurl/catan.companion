@@ -55,7 +55,9 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
 
 ## Fase C — Pulido pre-lanzamiento
 
-- [ ] **C1** Pantalla de fin de partida con estadísticas + historial de partidas guardadas.
+- [x] **C1a** Historial de partidas ("Mis partidas"): resumen derivado del log, local +
+      Supabase, con jugadores, puntajes, duración y tiradas.
+- [ ] **C1b** Pantalla de fin de partida con estadísticas (usa el mismo resumen).
 - [ ] **C2** Error reporting (Sentry o similar) + analytics básico, meta tags/OG, dominio.
 - [ ] **C3** QA en dispositivos reales + Lighthouse.
 
@@ -68,10 +70,48 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
 - [x] Reordenar jugadores / orden de turnos en setup y en juego (PR #6)
 - [x] Alerta de descartes al salir 7 + badge de mano >7 cartas (PR #7)
 
+## Base de datos de usuarios y partidas (sin login)
+
+Identidad: la sesión anónima de Supabase (`auth.uid()`, persistida en el navegador)
+identifica al dispositivo; el nombre visible es local y se sube a `profiles`. No hay
+contraseña ni email. Si en algún momento se agrega login, se linkea el mismo uid y
+los datos ya guardados siguen siendo válidos.
+
+**Fase 1 — hecha** (`supabase/history.sql`, `src/game/summary.js`, `src/history/`)
+
+- `profiles(user_id, display_name, last_seen_at)`
+- `games(id, owner_id, room_code, mode, expansion, player_count, status, started_at,
+  ended_at, duration_seconds, turns, roll_count, dice_totals, winner_index, winner_name)`
+- `game_players(game_id, player_index, name, color_index, user_id, vp, settlements,
+  cities, roads_built, knights, dev_cards, longest_road, largest_army)`
+- `game_rolls(game_id, seq, d1, d2, total, player_index, manual, rolled_at)`
+- `game_participants(game_id, user_id)` — qué dispositivos jugaron cada partida
+- El `id` de la partida es el uid de su acción de creación: guardar dos veces es
+  idempotente. Escribe el dueño (host o el propio celular); los demás se registran
+  como participantes.
+- RLS: cada dispositivo lee solo las partidas propias o donde participó.
+
+**Fase 2 — próximos pasos**
+
+1. **Cola offline del historial**: hoy si falla el push queda solo el local; agregar
+   reintento (igual que `catan.onlinePending.v1` del log online).
+2. **Jugadores recurrentes**: tabla `people(id, owner_id, name)` + `game_players.person_id`
+   para que "Beto" sea el mismo entre partidas y se puedan calcular records
+   (winrate, PV promedio, suerte con los dados).
+3. **Pantalla de estadísticas**: acumulado por persona y por número (¿el 8 sale menos
+   de lo que debería?), sobre `game_rolls`.
+4. **Fin de partida**: guardar `ended_at` real al detectar ganador (hoy es el ts de la
+   última acción) y mostrar el resumen post-partida.
+5. **Retención/limpieza**: borrar partidas en estado `lobby` sin actividad y ofrecer
+   exportar a JSON/CSV.
+6. **Login opcional (más adelante)**: magic link de Supabase; al linkear, `update` de
+   `owner_id`/`user_id` del uid anónimo al definitivo.
+
 ## Pendiente de acción manual (bloqueante para online)
 
 1. Crear proyecto Supabase (gratis) — pasos en `catan-vercel-pwa/.env.example`
-2. Correr `catan-vercel-pwa/supabase/schema.sql` en el SQL Editor
+2. Correr `catan-vercel-pwa/supabase/schema.sql` y `catan-vercel-pwa/supabase/history.sql`
+   en el SQL Editor
 3. Habilitar Anonymous sign-ins (Authentication → Providers)
 4. Setear `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` en Vercel
 5. QA con 2 dispositivos reales (crear sala / unirse / sync / cola offline / undo remoto)
