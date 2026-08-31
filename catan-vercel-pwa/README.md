@@ -33,6 +33,17 @@ Requiere un proyecto Supabase. Pasos en [.env.example](.env.example):
 
 Sin esas variables la app funciona en modo local/offline y el UI online queda oculto.
 
+## Consultor de reglas con IA (opcional)
+
+El botón **❓ Reglas** responde dudas puntuales en medio de la partida. La app es
+estática, así que la consulta pasa por una Vercel Function ([api/rules.js](api/rules.js))
+que llama a la API de Claude con la key guardada del lado del servidor.
+
+Para activarlo: crear una API key en [console.anthropic.com](https://console.anthropic.com)
+y cargarla en Vercel como `ANTHROPIC_API_KEY` (marcada como *Sensitive*: nunca llega al
+navegador). Sin la variable, el botón explica cómo configurarlo y no gasta nada.
+`CATAN_RULES_MODEL` permite cambiar el modelo (por defecto `claude-opus-5`).
+
 ## Arquitectura
 
 El estado del juego es un **log de acciones** aplicado por un reducer puro

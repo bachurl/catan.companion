@@ -17,6 +17,7 @@ export const initialGameState = {
   started: false,
   inLobby: false, // sala online creada, esperando que cada jugador cargue sus datos
   gameMode: "full",
+  expansion: false, // 5-6 jugadores: habilita construir en turno ajeno
   players: [],
   cp: 0, // índice del jugador actual
   turnPhase: "preroll",
@@ -93,7 +94,7 @@ export function gameReducer(state, action) {
         devCards: [], knightsPlayed: 0, roadsBuilt: 0,
         ports: [], devCardBought: [], devCardPlayed: false,
       }));
-      return { ...initialGameState, inLobby: true, gameMode: action.mode, players, deck: action.deck };
+      return { ...initialGameState, inLobby: true, gameMode: action.mode, expansion: !!action.expansion, players, deck: action.deck };
     }
 
     case "SET_PLAYER_NAME": {
@@ -151,6 +152,7 @@ export function gameReducer(state, action) {
         ...initialGameState,
         started: true,
         gameMode: action.mode,
+        expansion: !!action.expansion,
         players,
         deck: action.deck,
         nextId,
@@ -236,59 +238,66 @@ export function gameReducer(state, action) {
       return { ...state, players, log: pushLog(state.log, ts, `🦹 ${state.players[state.cp].name} robó 1${RM[action.res].e} a ${state.players[action.victim].name}`) };
     }
 
+    // Las construcciones llevan `player` explícito: en la expansión 5-6 se
+    // puede construir en el turno de otro (fase de construcción especial).
+    // Sin `player`, construye el jugador de turno (acciones viejas).
     case "BUILD_ROAD": {
+      const pi = action.player ?? state.cp;
       const cost = COSTS.camino;
-      if (mode.enforceCosts && !afford(state.players[state.cp].hand, cost)) return state;
+      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       const players = state.players.map((p, i) => {
-        if (i !== state.cp) return p;
+        if (i !== pi) return p;
         return { ...p, hand: mode.enforceCosts ? subCost(p.hand, cost) : p.hand, roadsBuilt: p.roadsBuilt + 1 };
       });
-      return { ...state, players, log: pushLog(state.log, ts, `🛤️ ${state.players[state.cp].name} construyó un camino (total: ${state.players[state.cp].roadsBuilt + 1})`) };
+      return { ...state, players, log: pushLog(state.log, ts, `🛤️ ${state.players[pi].name} construyó un camino (total: ${state.players[pi].roadsBuilt + 1})`) };
     }
 
     case "ADD_SETTLEMENT": {
-      // payload: { hexes }
+      // payload: { hexes, player? }
+      const pi = action.player ?? state.cp;
       const cost = COSTS.poblado;
-      if (mode.enforceCosts && !afford(state.players[state.cp].hand, cost)) return state;
+      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       const { prods, nextId } = buildProductions(action.hexes, state.nextId);
       const players = state.players.map((p, i) => {
-        if (i !== state.cp) return p;
+        if (i !== pi) return p;
         return {
           ...p,
           hand: mode.enforceCosts ? subCost(p.hand, cost) : p.hand,
           productions: [...p.productions, ...prods],
         };
       });
-      return { ...state, players, nextId, log: pushLog(state.log, ts, `🏠 ${state.players[state.cp].name} construyó un poblado`) };
+      return { ...state, players, nextId, log: pushLog(state.log, ts, `🏠 ${state.players[pi].name} construyó un poblado`) };
     }
 
     case "UPGRADE_CITY": {
-      // payload: { gid }
+      // payload: { gid, player? }
+      const pi = action.player ?? state.cp;
       const cost = COSTS.ciudad;
-      if (mode.enforceCosts && !afford(state.players[state.cp].hand, cost)) return state;
+      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       const players = state.players.map((p, i) => {
-        if (i !== state.cp) return p;
+        if (i !== pi) return p;
         return {
           ...p,
           hand: mode.enforceCosts ? subCost(p.hand, cost) : p.hand,
           productions: p.productions.map(pr => pr.gid === action.gid ? { ...pr, isCity: true } : pr),
         };
       });
-      return { ...state, players, log: pushLog(state.log, ts, `🏙️ ${state.players[state.cp].name} mejoró a ciudad`) };
+      return { ...state, players, log: pushLog(state.log, ts, `🏙️ ${state.players[pi].name} mejoró a ciudad`) };
     }
 
     case "BUY_DEV": {
-      // payload: { card? } — con mazo físico se elige la carta que salió;
-      // sin `card` se toma el tope del mazo virtual (acciones viejas).
+      // payload: { card?, player? } — con mazo físico se elige la carta que
+      // salió; sin `card` se toma el tope del mazo virtual (acciones viejas).
+      const pi = action.player ?? state.cp;
       const cost = COSTS.desarrollo;
       const card = action.card ?? state.deck[0];
       if (!card) return state; // mazo virtual vacío y sin carta explícita
-      if (mode.enforceCosts && !afford(state.players[state.cp].hand, cost)) return state;
+      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       // Descuenta esa carta del mazo virtual si todavía figuraba.
       const di = state.deck.indexOf(card);
       const deck = di >= 0 ? [...state.deck.slice(0, di), ...state.deck.slice(di + 1)] : state.deck;
       const players = state.players.map((p, i) => {
-        if (i !== state.cp) return p;
+        if (i !== pi) return p;
         return {
           ...p,
           hand: mode.enforceCosts ? subCost(p.hand, cost) : p.hand,
@@ -296,7 +305,7 @@ export function gameReducer(state, action) {
           devCardBought: [...p.devCardBought, card],
         };
       });
-      return { ...state, players, deck, log: pushLog(state.log, ts, `🃏 ${state.players[state.cp].name} compró ${DC[card]?.e || ""} ${DC[card]?.n || "carta de desarrollo"}`) };
+      return { ...state, players, deck, log: pushLog(state.log, ts, `🃏 ${state.players[pi].name} compró ${DC[card]?.e || ""} ${DC[card]?.n || "carta de desarrollo"}`) };
     }
 
     case "PLAY_DEV": {
@@ -485,8 +494,12 @@ export function gameReducer(state, action) {
     }
 
     case "END_TURN": {
-      const players = state.players.map((p, i) => i === state.cp ? { ...p, devCardBought: [], devCardPlayed: false } : p);
       const next = (state.cp + 1) % state.players.length;
+      // Se limpia para el que termina y para el que arranca: una carta comprada
+      // en turno ajeno (fase de construcción especial) ya se puede jugar cuando
+      // le toca a su dueño.
+      const players = state.players.map((p, i) =>
+        (i === state.cp || i === next) ? { ...p, devCardBought: [], devCardPlayed: false } : p);
       return {
         ...state,
         players,

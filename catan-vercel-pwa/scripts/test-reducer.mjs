@@ -275,6 +275,48 @@ console.log("BUY_DEV con carta elegida (mazo físico):");
     "sin carta explícita usa el mazo virtual y se frena al vaciarse");
 }
 
+console.log("EXPANSIÓN 5-6: construir en turno ajeno:");
+{
+  const exp = [
+    {
+      type: "START_GAME", ts, mode: "full", expansion: true,
+      players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }],
+      settlements: { 0: [{ hexes: [{ num: "6", res: "trigo" }] }], 1: [{ hexes: [{ num: "6", res: "madera" }] }] },
+      deck: ["monopolio", "caballero"],
+    },
+    // Beto junta recursos y construye un camino en el turno de Ana
+    { type: "MANUAL_ADJUST", ts, player: 1, res: "madera", delta: 1 },
+    { type: "MANUAL_ADJUST", ts, player: 1, res: "ladrillo", delta: 1 },
+    { type: "BUILD_ROAD", ts, player: 1 },
+  ];
+  let es = replayActions(exp);
+  assert(es.expansion === true, "la partida guarda el flag de expansión");
+  assert(es.cp === 0, "sigue siendo el turno de Ana");
+  assert(es.players[1].roadsBuilt === 1, "Beto construyó en el turno de Ana");
+  assert(es.players[0].roadsBuilt === 0, "no se le cargó a la jugadora de turno");
+  assert(totalC(es.players[1].hand) === 0, "el costo salió de la mano de Beto");
+
+  // Sin `player` la construcción sigue siendo del jugador de turno (acciones viejas)
+  assert(replayActions([...exp, { type: "MANUAL_ADJUST", ts, player: 0, res: "madera", delta: 1 },
+    { type: "MANUAL_ADJUST", ts, player: 0, res: "ladrillo", delta: 1 },
+    { type: "BUILD_ROAD", ts }]).players[0].roadsBuilt === 1, "sin player construye el de turno");
+
+  // Carta comprada en turno ajeno: se puede jugar cuando llega su turno
+  exp.push({ type: "MANUAL_ADJUST", ts, player: 1, res: "mineral", delta: 1 });
+  exp.push({ type: "MANUAL_ADJUST", ts, player: 1, res: "trigo", delta: 1 });
+  exp.push({ type: "MANUAL_ADJUST", ts, player: 1, res: "oveja", delta: 1 });
+  exp.push({ type: "BUY_DEV", ts, player: 1, card: "caballero" });
+  es = replayActions(exp);
+  assert(es.players[1].devCards[0] === "caballero", "Beto compró en el turno de Ana");
+  assert(es.players[1].devCardBought.includes("caballero"), "queda marcada como comprada");
+  exp.push({ type: "END_TURN", ts }); // arranca el turno de Beto
+  exp.push({ type: "ROLL", ts, d1: 1, d2: 1, manual: true });
+  exp.push({ type: "PLAY_DEV", ts, card: "caballero", cardIdx: 0 });
+  es = replayActions(exp);
+  assert(es.cp === 1, "es el turno de Beto");
+  assert(es.players[1].knightsPlayed === 1, "puede jugar en su turno la carta comprada en el ajeno");
+}
+
 console.log("mergeWithLocal (resync online):");
 {
   const server = [{ uid: "a", type: "X" }, { uid: "b", type: "Y" }];

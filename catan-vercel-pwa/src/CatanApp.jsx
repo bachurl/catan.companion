@@ -25,6 +25,9 @@ const FIX_ACTIONS = new Set([
 ]);
 // En el lobby, cada celular edita solo a su jugador (el host o la mesa, a cualquiera).
 const LOBBY_ACTIONS = new Set(["SET_PLAYER_NAME", "SET_INITIAL_SETTLEMENTS"]);
+// Construcciones: en la expansión 5-6 se permiten en turno ajeno, siempre que
+// la acción sea para el propio jugador (fase de construcción especial).
+const BUILD_ACTIONS = new Set(["BUILD_ROAD", "ADD_SETTLEMENT", "UPGRADE_CITY", "BUY_DEV"]);
 
 // Agrupa las producciones de un jugador por poblado/ciudad (gid).
 const getSettlementGroups = (p) => {
@@ -91,15 +94,20 @@ export default function CatanApp() {
             return null;
           }
         } else if (TURN_ACTIONS.has(action.type)) {
-          showNotif(`⏳ Es el turno de ${game.players[game.cp]?.name || "otro jugador"}`);
-          return null;
+          // Excepción: expansión 5-6, construir para uno mismo en turno ajeno.
+          const specialBuild = game.expansion && BUILD_ACTIONS.has(action.type)
+            && action.player === online.myPlayerIndex;
+          if (!specialBuild) {
+            showNotif(`⏳ Es el turno de ${game.players[game.cp]?.name || "otro jugador"}`);
+            return null;
+          }
         }
       }
     }
     const stamped = dispatchAction(action);
     if (online.room) online.pushAction(stamped);
     return stamped;
-  }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.started, game.cp, game.players, showNotif]);
+  }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.started, game.cp, game.players, game.expansion, showNotif]);
 
   // Partida guardada pendiente de retomar (si existe y no terminó)
   const [savedGame, setSavedGame] = useState(() => {
@@ -115,6 +123,8 @@ export default function CatanApp() {
   const [phase, setPhase] = useState("mode");
   const [gameMode, setGameMode] = useState("full");
   const [pCount, setPCount] = useState(3);
+  const [expansion, setExpansion] = useState(false); // 5-6: fase de construcción especial
+  const [buildSeat, setBuildSeat] = useState(null); // quién construye (mesa local con expansión)
   const [setupPlayers, setSetupPlayers] = useState([]);
   const [setupIdx, setSetupIdx] = useState(0);
   const [setupData, setSetupData] = useState({});
@@ -136,6 +146,9 @@ export default function CatanApp() {
   const [tradeReceive, setTradeReceive] = useState(eHand());
   // Lobby: asiento en edición (null = el jugador reclamado) + editor local
   const [fixOpen, setFixOpen] = useState(null); // jugador con el panel de correcciones abierto
+  const [rulesQ, setRulesQ] = useState("");
+  const [rulesMsgs, setRulesMsgs] = useState([]);
+  const [rulesBusy, setRulesBusy] = useState(false);
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [editingSeat, setEditingSeat] = useState(null);
   const [seatLoaded, setSeatLoaded] = useState(null);
@@ -152,6 +165,14 @@ export default function CatanApp() {
   const isMyTurn = inRoomAsPlayer && myIdx === cp;
   const canAct = !inRoomAsPlayer || isMyTurn;
   const canFix = canAct || Boolean(online.room?.isHost);
+
+  // ── CONSTRUCCIÓN ──
+  // Con la expansión 5-6 se puede construir en el turno de otro: en una sala
+  // cada celular construye para su jugador; en modo mesa se elige el asiento.
+  const buildIdx = inRoomAsPlayer ? myIdx : (game.expansion && buildSeat !== null ? buildSeat : cp);
+  const buildingForOther = buildIdx !== cp;
+  const canBuildNow = !buildingForOther || Boolean(game.expansion);
+  const builder = players[buildIdx] || players[cp];
 
   // La pantalla no se apaga durante la partida (se libera al terminar).
   useWakeLock(phase === "game" && game.started && winner === null);
@@ -228,6 +249,7 @@ export default function CatanApp() {
   // (quien usa dados físicos ve el teclado 2-12 directo).
   useEffect(() => {
     if (game.started) setManualPickerOpen(loadPrefManual());
+    setBuildSeat(null); // la fase de construcción especial es por turno
   }, [game.started, cp, turn]);
 
   // ── TRANSICIÓN LOBBY ⇄ JUEGO ──
@@ -315,6 +337,7 @@ export default function CatanApp() {
     dispatch({
       type: "START_GAME",
       mode: gameMode,
+      expansion,
       players: setupPlayers.map(p => ({ name: p.name, ci: p.ci })),
       settlements: setupData,
       deck: shuffle([...INIT_DECK]),
@@ -424,17 +447,19 @@ export default function CatanApp() {
 
   // Construir con confirmación + error claro
   const requestBuild = (type) => {
-    if (!canAct) {
+    if (!canBuildNow) {
       showNotif(`⏳ Es el turno de ${players[cp]?.name}`);
       return;
     }
     if (mode.enforceCosts) {
-      if (turnPhase !== "rolled") {
+      // En la fase de construcción especial no hace falta haber tirado:
+      // el dado es del jugador de turno, no de quien construye.
+      if (!buildingForOther && turnPhase !== "rolled") {
         showNotif("Primero tirá los dados (y esperá a que se distribuyan recursos)");
         return;
       }
       const cost = COSTS[type];
-      if (!afford(players[cp].hand, cost)) {
+      if (!afford(builder.hand, cost)) {
         showNotif("No se puede: te faltan recursos");
         return;
       }
@@ -444,10 +469,10 @@ export default function CatanApp() {
 
   const doBuild = (type) => {
     const cost = COSTS[type];
-    if (mode.enforceCosts && !afford(players[cp].hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
+    if (mode.enforceCosts && !afford(builder.hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
 
     if (type === "camino") {
-      dispatch({ type: "BUILD_ROAD" });
+      dispatch({ type: "BUILD_ROAD", player: buildIdx });
       showNotif("Camino construido");
     } else if (type === "poblado") {
       setModalHexes([{ num: "", res: "" }]);
@@ -461,19 +486,19 @@ export default function CatanApp() {
   };
 
   const buyDevCard = (card) => {
-    dispatch({ type: "BUY_DEV", card });
+    dispatch({ type: "BUY_DEV", card, player: buildIdx });
     showNotif(card ? `Compraste: ${DC[card].e} ${DC[card].n}` : "Carta de desarrollo comprada");
     setModal(null);
   };
 
   const addSettlement = (hexes) => {
-    dispatch({ type: "ADD_SETTLEMENT", hexes });
+    dispatch({ type: "ADD_SETTLEMENT", hexes, player: buildIdx });
     showNotif("Poblado construido");
     setModal(null);
   };
 
   const upgradeToCity = (gidVal) => {
-    dispatch({ type: "UPGRADE_CITY", gid: gidVal });
+    dispatch({ type: "UPGRADE_CITY", gid: gidVal, player: buildIdx });
     showNotif("Ciudad construida");
     setModal(null);
   };
@@ -609,7 +634,7 @@ export default function CatanApp() {
     try {
       const r = await online.createRoom([]);
       resetGame(); // el lobby arranca con log limpio (descarta cualquier partida local previa)
-      dispatch({ type: "CREATE_LOBBY", mode: gameMode, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
+      dispatch({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
       setSavedGame(null);
       setWinner(null);
       setEditingSeat(null);
@@ -658,6 +683,37 @@ export default function CatanApp() {
     np[si].hexes = np[si].hexes.filter((_, j) => j !== hi);
     return np;
   });
+
+  // ── CONSULTOR DE REGLAS ──
+  // La pregunta va a /api/rules (la API key vive en el server, no en el cliente).
+  const askRules = async (q) => {
+    const question = (q ?? rulesQ).trim();
+    if (!question || rulesBusy) return;
+    const next = [...rulesMsgs, { role: "user", content: question }];
+    setRulesQ("");
+    setRulesMsgs(next);
+    setRulesBusy(true);
+    try {
+      const r = await fetch("/api/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question,
+          history: rulesMsgs.slice(-6),
+          context: { expansion: Boolean(game.expansion) },
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      setRulesMsgs([...next, {
+        role: "assistant",
+        content: data.answer || data.error || "No pude responder. Probá de nuevo.",
+        isError: !data.answer,
+      }]);
+    } catch {
+      setRulesMsgs([...next, { role: "assistant", content: "Sin conexión: no pude consultar las reglas.", isError: true }]);
+    }
+    setRulesBusy(false);
+  };
 
   // Comparte el código de sala con un link que lo precarga (?sala=CODIGO).
   const shareRoomCode = async () => {
@@ -816,12 +872,27 @@ export default function CatanApp() {
         <p className="text-slate-300 mb-4 text-lg">¿Cuántos jugadores?</p>
         <div className="flex gap-3 justify-center mb-8">
           {[2, 3, 4, 5, 6].map(n => (
-            <button key={n} onClick={() => setPCount(n)}
+            <button key={n} onClick={() => { setPCount(n); setExpansion(n >= 5); }}
               className={`w-14 h-14 rounded-xl text-xl font-bold transition-all ${pCount === n ? "bg-amber-500 text-white scale-110 shadow-lg shadow-amber-500/30" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
               {n}
             </button>
           ))}
         </div>
+
+        {pCount >= 5 && (
+          <button onClick={() => setExpansion(v => !v)}
+            className={`w-full mb-6 p-3 rounded-2xl border-2 text-left transition-all ${expansion ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60"}`}>
+            <div className="flex items-center gap-3">
+              <div className={`w-5 h-5 rounded flex items-center justify-center text-xs font-black ${expansion ? "bg-amber-500 text-white" : "bg-slate-700 text-slate-500"}`}>
+                {expansion ? "✓" : ""}
+              </div>
+              <div className="flex-1">
+                <div className="font-bold text-amber-300 text-sm">Expansión 5-6 jugadores</div>
+                <div className="text-slate-400 text-xs">Habilita la fase de construcción especial: cada uno puede construir en el turno de otro.</div>
+              </div>
+            </div>
+          </button>
+        )}
         {online.isConfigured ? (
           <div className="space-y-3">
             <button onClick={createLobbyRoom} disabled={lobbyBusy}
@@ -1251,6 +1322,11 @@ export default function CatanApp() {
                 )}
               </button>
             )}
+            <button onClick={() => setModal({ type: "rules" })}
+              className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-base transition-all"
+              title="Consultar reglas">
+              ❓
+            </button>
             {canUndo && canFix && (
               <button onClick={requestUndo}
                 className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-base transition-all"
@@ -1505,13 +1581,37 @@ export default function CatanApp() {
           {tab === "construir" && (
             <div className="space-y-4">
               <h3 className="text-slate-300 font-semibold">Construcciones</h3>
-              {!canAct && (
+
+              {/* Mesa local con expansión: elegir quién construye */}
+              {game.expansion && !inRoomAsPlayer && (
+                <div className="bg-slate-800/60 rounded-2xl p-3">
+                  <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-2">Construye</div>
+                  <div className="flex flex-wrap gap-2">
+                    {players.map((p, i) => (
+                      <button key={i} onClick={() => setBuildSeat(i === cp ? null : i)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-all"
+                        style={{ backgroundColor: i === buildIdx ? COLORS[p.ci].h : "#334155" }}>
+                        {p.name}{i === cp ? " (turno)" : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!canBuildNow && (
                 <p className="text-slate-400 text-sm">⏳ Es el turno de <span className="font-bold text-amber-300">{cur.name}</span>. Solo quien tiene el turno construye.</p>
+              )}
+              {canBuildNow && buildingForOther && (
+                <p className="text-amber-300/90 text-sm bg-amber-500/10 border border-amber-500/30 rounded-xl p-3">
+                  🏗️ <b>Fase de construcción especial</b> (expansión 5-6): construyendo para <b>{builder.name}</b> en el turno de {cur.name}.
+                </p>
               )}
               {Object.entries(COSTS)
                 .filter(([type]) => mode.showDevCards || type !== "desarrollo")
                 .map(([type, cost]) => {
-                const canBuild = canAct && (mode.enforceCosts ? (afford(cur.hand, cost) && turnPhase === "rolled") : true);
+                const canBuild = canBuildNow && (mode.enforceCosts
+                  ? (afford(builder.hand, cost) && (buildingForOther || turnPhase === "rolled"))
+                  : true);
                 return (
                   <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
                     <div>
@@ -1533,12 +1633,12 @@ export default function CatanApp() {
               })}
 
               <div className="bg-slate-800/50 rounded-2xl p-4 mt-6">
-                <h3 className="text-slate-300 font-semibold mb-3">{inRoomAsPlayer && !isMyTurn ? `Propiedades de ${cur.name}` : "Tus propiedades"}</h3>
-                {getSettlementGroups(cur).length === 0 ? (
+                <h3 className="text-slate-300 font-semibold mb-3">{buildIdx === cp && !inRoomAsPlayer ? "Tus propiedades" : `Propiedades de ${builder.name}`}</h3>
+                {getSettlementGroups(builder).length === 0 ? (
                   <p className="text-slate-500 text-sm">Sin propiedades registradas</p>
                 ) : (
                   <div className="space-y-2">
-                    {getSettlementGroups(cur).map((g, i) => (
+                    {getSettlementGroups(builder).map((g, i) => (
                       <div key={g.gid} className="flex items-center gap-2 flex-wrap">
                         <span className="text-white text-sm">{g.isCity ? "🏙️" : "🏠"}</span>
                         {g.hexes.map(h => (
@@ -1985,6 +2085,58 @@ export default function CatanApp() {
               );
             })()}
 
+            {/* Consultor de reglas */}
+            {modal.type === "rules" && (
+              <div>
+                <h3 className="text-xl font-bold text-amber-400 mb-1">❓ Reglas de Catán</h3>
+                <p className="text-slate-400 text-xs mb-3">Preguntá una duda puntual para seguir jugando.</p>
+
+                <div className="bg-slate-900/60 rounded-2xl p-3 mb-3 max-h-64 overflow-y-auto space-y-2">
+                  {rulesMsgs.length === 0 && !rulesBusy && (
+                    <div className="space-y-1.5">
+                      <p className="text-slate-500 text-xs mb-2">Por ejemplo:</p>
+                      {[
+                        "¿Puedo jugar dos cartas de desarrollo en el mismo turno?",
+                        "¿El ladrón puede quedarse en el desierto?",
+                        "¿Cómo se cuenta el camino más largo si se corta?",
+                      ].map(q => (
+                        <button key={q} onClick={() => askRules(q)}
+                          className="w-full text-left text-xs bg-slate-700/60 hover:bg-slate-700 text-slate-300 rounded-lg px-3 py-2 transition-all">
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {rulesMsgs.map((m, i) => (
+                    <div key={i} className={`text-sm rounded-xl px-3 py-2 ${m.role === "user"
+                      ? "bg-blue-500/20 text-blue-100 ml-6"
+                      : m.isError ? "bg-red-900/30 text-red-200 mr-6" : "bg-slate-700/60 text-slate-100 mr-6"}`}>
+                      {m.content}
+                    </div>
+                  ))}
+                  {rulesBusy && <div className="text-slate-500 text-sm px-3 py-2">Consultando…</div>}
+                </div>
+
+                <form onSubmit={(e) => { e.preventDefault(); askRules(); }} className="flex gap-2">
+                  <input
+                    value={rulesQ}
+                    onChange={e => setRulesQ(e.target.value)}
+                    placeholder="Tu pregunta…"
+                    maxLength={500}
+                    className="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:border-amber-500 focus:outline-none"
+                  />
+                  <button type="submit" disabled={rulesBusy || !rulesQ.trim()}
+                    className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold rounded-xl transition-all">
+                    Preguntar
+                  </button>
+                </form>
+
+                <button onClick={() => setModal(null)} className="w-full py-3 mt-2 bg-slate-700 text-slate-300 rounded-xl font-bold">
+                  Cerrar
+                </button>
+              </div>
+            )}
+
             {/* Elegir qué carta de desarrollo salió del mazo físico */}
             {modal.type === "pickDev" && (
               <div>
@@ -2228,7 +2380,7 @@ export default function CatanApp() {
 
             {/* Upgrade to city */}
             {modal.type === "upgradeCity" && (() => {
-              const groups = getSettlementGroups(cur).filter(g => !g.isCity);
+              const groups = getSettlementGroups(builder).filter(g => !g.isCity);
               return (
                 <div>
                   <h3 className="text-xl font-bold text-amber-400 mb-2">🏙️ Mejorar a ciudad</h3>

@@ -39,6 +39,20 @@ Esto habilita con una sola pieza:
 
 Decisión v1: el creador de la sala carga el setup (nombres, poblados); los demás se unen y juegan.
 
+## Fase D — Feedback de las primeras partidas reales (30/8)
+
+- [x] **D1** (#24) Convergencia de sync — ver B8.
+- [x] **D2** (#25) El ladrón bloquea un hexágono (número + recurso), no todos los del número.
+- [x] **D3** (#26) Cartas de desarrollo jugables antes de tirar (caballero para mover el ladrón).
+- [x] **D4** (#27) Puntaje real: al comprar se elige la carta que salió del mazo físico, y se pueden corregir cartas de desarrollo por jugador.
+- [x] **D5** (#28) Correcciones: agregar/marcar ciudad además de poblado.
+- [x] **D6** (#29) Barra superior ordenada por puntos (incluye cartas de victoria y títulos).
+- [x] **D7** (#30) Contador de rondas y de tiradas acumulado en el estado.
+- [x] **D8** (#31) Insights de tiradas: salido vs. esperado, más/menos frecuentes, tiradas sin 7.
+- [x] **D9** (#32) Camino más largo / ejército: ajuste de caminos y caballeros, y asignación manual del título.
+- [x] **D10** (#33) Expansión 5-6: fase de construcción especial (construir en turno ajeno).
+- [x] **D11** (#34) Consultor de reglas con IA vía Vercel Function (`api/rules.js`).
+
 ## Fase C — Pulido pre-lanzamiento
 
 - [ ] **C1** Pantalla de fin de partida con estadísticas + historial de partidas guardadas.

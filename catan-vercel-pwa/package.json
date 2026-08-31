@@ -10,6 +10,7 @@
     "test:reducer": "node scripts/test-reducer.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.72.0",
     "@supabase/supabase-js": "^2.112.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
