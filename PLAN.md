@@ -55,7 +55,11 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
 
 ## Fase C — Pulido pre-lanzamiento
 
-- [ ] **C1** Pantalla de fin de partida con estadísticas + historial de partidas guardadas.
+- [x] **C1a** Estadísticas **en vivo** (tab 📊, disponible durante toda la partida) + la misma pantalla al terminar:
+  carrera de puntos por ronda, producción por jugador y recurso, detalle por jugador (dados, bloqueos del
+  ladrón, comercios, robos) y distribución de tiradas vs. lo esperado. Se derivan del log de acciones, así que
+  acompañan deshacer/resync y las partidas ya guardadas muestran el historial completo hacia atrás.
+- [ ] **C1b** Historial de partidas terminadas (guardar y volver a ver partidas anteriores).
 - [ ] **C2** Error reporting (Sentry o similar) + analytics básico, meta tags/OG, dominio.
 - [ ] **C3** QA en dispositivos reales + Lighthouse.
 
