@@ -105,7 +105,10 @@ export default function CatanApp() {
       }
     }
     const stamped = dispatchAction(action);
-    if (online.room) online.pushAction(stamped);
+    // Sin condicionar por online.room: apenas se crea la sala, la primera
+    // acción se despacha en el mismo tick y `online.room` todavía es null en
+    // este closure. pushAction ya no hace nada si no hay sala.
+    online.pushAction(stamped);
     return stamped;
   }, [dispatchAction, online.room, online.pushAction, online.myPlayerIndex, game.started, game.cp, game.players, game.expansion, showNotif]);
 
@@ -646,9 +649,13 @@ export default function CatanApp() {
   const createLobbyRoom = async () => {
     setLobbyBusy(true);
     try {
-      const r = await online.createRoom([]);
-      resetGame(); // el lobby arranca con log limpio (descarta cualquier partida local previa)
-      dispatch({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
+      // Primero se arma el lobby local (log limpio + CREATE_LOBBY) y después se
+      // crea la sala subiendo ese log. Al revés, CREATE_LOBBY quedaba sin
+      // publicar (el closure todavía no veía la sala) y el primer resync la
+      // borraba del estado: pantalla en blanco.
+      resetGame(); // descarta cualquier partida local previa
+      const stamped = dispatchAction({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
+      const r = await online.createRoom([stamped]);
       setSavedGame(null);
       setWinner(null);
       setEditingSeat(null);
@@ -656,6 +663,10 @@ export default function CatanApp() {
       setPhase("lobby");
       showNotif(`🌐 Sala creada: ${r.code}. Compartí el código.`);
     } catch (e) {
+      // La sala no quedó creada: se vuelve al inicio en vez de dejar un lobby
+      // local huérfano que no sincroniza con nadie.
+      resetGame();
+      setPhase("mode");
       showNotif(`No se pudo crear la sala: ${e.message}`);
     }
     setLobbyBusy(false);
@@ -1274,7 +1285,28 @@ export default function CatanApp() {
   // ═══════════════════════════════════════════════
   //  RENDER: GAME
   // ═══════════════════════════════════════════════
-  if (phase !== "game" || !game.started) return null;
+  // Red de seguridad: si la fase de UI y el estado del juego se desalinean
+  // (p. ej. un resync deja el log vacío en un lobby), antes se devolvía null y
+  // la pantalla quedaba en blanco sin forma de salir.
+  if (phase !== "game" || !game.started) {
+    if (phase === "mode" || phase === "count" || phase === "names" || phase === "settlements") return null;
+    return (
+      <div className="catan-container center-screen">
+        <style>{STYLE_CSS}</style>
+        <div className="catan-card p-6 text-center max-w-sm">
+          <p className="text-4xl mb-3">🧭</p>
+          <h2 className="text-xl font-black text-amber-100 mb-2">Se perdió el estado de la partida</h2>
+          <p className="text-sm text-amber-200/80 mb-4">
+            {online.room
+              ? `La sala ${online.room.code} no devolvió acciones. Podés reintentar entrando con el código o volver al inicio.`
+              : "No hay una partida en curso para mostrar."}
+          </p>
+          <button onClick={() => { online.leaveRoom(); resetGame(); setPhase("mode"); }}
+            className="catan-btn w-full py-3 font-bold">Volver al inicio</button>
+        </div>
+      </div>
+    );
+  }
   const cur = players[cp];
   const diceSum = dice[0] + dice[1];
 

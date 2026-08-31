@@ -61,6 +61,7 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
   const unconfirmedRef = useRef(new Map()); // uid → acción local con insert en vuelo
   const lastServerIdRef = useRef(0); // último id canónico aplicado (detecta fuera-de-orden)
   const roomRef = useRef(null);
+  const userIdRef = useRef(null); // mismo valor que userId, legible en el mismo tick
   const flushingRef = useRef(false);
   const resyncingRef = useRef(false);
 
@@ -194,6 +195,7 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
   // Crea una sala nueva subiendo el log actual (puede ser vacío: lobby).
   const createRoom = useCallback(async (currentActions) => {
     const uid = await ensureAnonSession();
+    userIdRef.current = uid;
     setUserId(uid);
     const code = genCode();
     const { data: roomRow, error } = await supabase
@@ -221,6 +223,7 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
   // Se une a una sala existente; devuelve el log completo para replayar.
   const joinRoom = useCallback(async (codeInput) => {
     const uid = await ensureAnonSession();
+    userIdRef.current = uid;
     setUserId(uid);
     const code = codeInput.trim().toUpperCase();
     const { data: roomRow, error } = await supabase
@@ -247,7 +250,10 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
     seenUidsRef.current.add(stamped.uid);
     unconfirmedRef.current.set(stamped.uid, stamped);
     const { uid: actionUid, ...action } = stamped;
-    const row = { room_id: r.roomId, author_id: userId, uid: actionUid, action };
+    // author_id desde el ref: setUserId(uid) recién aplica en el próximo
+    // render, y la primera acción tras crear la sala se publica en el mismo
+    // tick (con userId todavía null el INSERT lo rechaza RLS).
+    const row = { room_id: r.roomId, author_id: userIdRef.current, uid: actionUid, action };
     supabase.from("room_actions").insert(row).then(({ error }) => {
       unconfirmedRef.current.delete(actionUid);
       if (error && error.code !== "23505") {
@@ -256,18 +262,19 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
         setPendingCount(pendingRef.current.length);
       }
     });
-  }, [userId]);
+  }, []);
 
   // Reclama (o libera) el control de un jugador.
   const claimPlayer = useCallback(async (playerIndex, displayName) => {
     const r = roomRef.current;
-    if (!r || !userId) return;
+    const uid = userIdRef.current;
+    if (!r || !uid) return;
     await supabase.from("room_members").upsert({
-      room_id: r.roomId, user_id: userId,
+      room_id: r.roomId, user_id: uid,
       player_index: playerIndex, display_name: displayName || null,
     });
     fetchMembers(r.roomId);
-  }, [userId, fetchMembers]);
+  }, [fetchMembers]);
 
   const leaveRoom = useCallback(() => {
     if (channelRef.current) supabase.removeChannel(channelRef.current);
