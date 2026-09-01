@@ -81,6 +81,89 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
 - [ ] **C3b** QA en dispositivos reales: sigue siendo lo único que no se puede automatizar desde acá
   (iOS/Android reales, PWA instalada, pantalla que no se apaga, vibración, 2+ celulares en una sala).
 
+## Fase E — Tablero real: generador de mapas + carga por foto
+
+Las dos funcionalidades pedidas (generador de mapas y carga por foto) necesitan lo mismo y hoy no
+existe: **un modelo del tablero**. Hasta ahora la app no sabe qué forma tiene la isla; un poblado se
+carga como una lista suelta de `{num, res}` (ver `reducer.js:56`, "la app no tiene modelo del
+tablero"). Por eso E1 es el cimiento compartido y conviene hacerlo primero, aunque después E2 y E3
+puedan avanzar en paralelo.
+
+### E1 — Modelo de tablero (cimiento compartido)
+
+- `src/board/geometry.js`: hexágonos en coordenadas axiales (`q, r`), con los layouts clásicos
+  (19 hexágonos, hasta 4 jugadores) y de expansión (30 hexágonos, hasta 6). Derivar de ahí los
+  **vértices** (54 / 84) y las **aristas** (72 / 114) con IDs canónicos y estables, más los vecinos
+  vértice→hexágonos, que es lo único que el motor necesita para producir recursos.
+- Forma del estado: `board = { layout: "base"|"ext", hexes: [{id, q, r, res, num}], ports:
+  [{vertices:[vA,vB], type:"3:1"|<recurso>}], robber: <hexId> }`, y en cada jugador
+  `settlements: [{vertex, isCity}]` / `roads: [edgeId]`.
+- Compatibilidad hacia atrás: el tablero es **opcional**. Sin `board` la app sigue exactamente como
+  hoy (poblados como listas de `{num,res}`); con `board`, los `{num,res}` se derivan del vértice.
+  Las partidas guardadas y los logs viejos siguen reproduciéndose sin migración.
+- El tablero viaja **dentro de la acción `SETUP`** (igual que hoy el mazo), así el replay sigue
+  siendo determinístico y el sync online lo distribuye a todos los celulares sin código nuevo.
+- Beneficios que caen solos una vez que hay tablero: el ladrón pasa a ser un hexágono concreto
+  (hoy es `num + res + jugadores`, un workaround), los puertos dejan de cargarse a mano y las
+  estadísticas pueden mostrar producción por hexágono.
+
+### E2 — Generador de mapas
+
+- **Motor** (`src/board/generate.js`, puro y testeable): baraja terrenos y fichas numéricas según el
+  layout (4 o 6 jugadores) y aplica las restricciones según el **grado de dificultad** elegido:
+  - *Oficial*: distribución del reglamento (fichas en espiral desde una esquina) — reproduce el
+    tablero "de caja".
+  - *Equilibrado*: aleatorio con reglas — nunca 6 y 8 adyacentes, ni dos números iguales adyacentes,
+    ningún vértice con más de 2 fichas rojas, y varianza de "pips" por recurso acotada.
+  - *Aleatorio*: sin restricciones, sale lo que sale.
+  - *Caótico*: busca activamente lo desparejo (clusters de números altos, recursos agrupados).
+  Implementación: generar y validar con reintentos (rechazo), con semilla explícita para que un
+  mapa se pueda compartir y regenerar igual.
+- **Render** (`src/board/BoardSvg.jsx`): SVG puro, sin dependencias nuevas — hexágonos con color de
+  recurso, ficha con número y puntos de probabilidad (ya existe `dotStr`), puertos en el borde,
+  ladrón en el desierto. El mismo componente sirve para previsualizar, para elegir vértices y para
+  mostrar el mapa de la partida en curso.
+- **Pantalla**: cantidad de jugadores (3-4 base / 5-6 expansión, coherente con el setup actual),
+  dificultad, botón "Generar otro", indicadores de balance (pips por recurso, choques de 6/8) y
+  **"Usar este mapa"**, que fija el `board` de la partida.
+- **Extras baratos**: compartir el mapa por link/código de semilla e imprimirlo/guardarlo como
+  imagen para armar el tablero físico.
+
+### E3 — Cargar el tablero desde una foto
+
+- **Flujo**: sacar la foto (`<input capture>`) → subir → la app propone un tablero completo →
+  el usuario corrige lo que salió mal sobre la imagen → confirmar.
+- **Reconocimiento**: nueva Vercel Function `api/vision.js` con Claude vision (ya hay
+  `@anthropic-ai/sdk` y el patrón de `api/rules.js`), que devuelve **JSON estructurado** con el
+  mismo esquema de E1: hexágonos con recurso y número en orden canónico, puertos, y poblados/
+  ciudades/caminos por color de jugador. La geometría conocida del tablero es la que hace viable el
+  reconocimiento: el modelo no inventa posiciones, completa casilleros de una grilla fija.
+- **Corrección obligatoria antes de confirmar**: el resultado se muestra sobre la foto con nivel de
+  confianza por hexágono; tocar un hexágono/vértice permite cambiarlo. Nada se aplica al juego sin
+  que el usuario confirme — el reconocimiento es un borrador, no la fuente de verdad.
+- **Dos usos**:
+  1. *Al empezar*: cargar el tablero físico + los poblados iniciales de todos en una sola foto, en
+     vez de tipear dos poblados por jugador.
+  2. *Durante la partida*: una foto para reconciliar el estado (útil cuando alguien construyó sin
+     cargarlo). Se traduce a acciones de corrección ya existentes (`ADD_FREE_SETTLEMENT`, ciudades,
+     caminos), y se muestra el diff "esto cambió" antes de aplicar.
+- **Costos y privacidad**: la imagen se manda al endpoint, no se guarda; se redimensiona en el
+  cliente antes de subir. Sin `ANTHROPIC_API_KEY` la funcionalidad se reporta no disponible y el
+  resto de la app anda igual (mismo criterio que el consultor de reglas).
+
+### Orden sugerido
+
+1. **E1** geometría + modelo + render SVG (con tests en `scripts/`, como `test-reducer.mjs`).
+2. **E2** generador + pantalla de previsualización + "Usar este mapa" — entrega valor solo.
+3. **E1b** selección de poblados tocando el tablero (reemplaza el tipeo de `{num,res}` cuando hay
+   board, en setup individual y en el lobby online).
+4. **E3** foto → JSON → corrección → aplicar, primero para el setup inicial y después para
+   reconciliar en partida.
+
+Riesgo principal: E3 depende de la calidad del reconocimiento con fotos reales (ángulo, luz,
+sombras). Mitigación: E1/E2 no dependen de eso, y E3 siempre pasa por la pantalla de corrección,
+así que en el peor caso queda como "carga asistida" en vez de automática.
+
 ## Completado
 
 - [x] Borrar `catan-vercel/` duplicado (PR #2)
