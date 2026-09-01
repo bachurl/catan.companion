@@ -283,7 +283,9 @@ function Ranking({ stats, players, finalScores, scoreOrder, longestRoad, largest
         {order.map((i, pos) => {
           const p = players[i];
           const s = stats[i];
-          const vpCards = p.devCards.filter(c => c === "victoria").length;
+          // Cartas de punto: las reveladas y las que se guardó sin mostrar.
+          // Al ver el detalle la partida ya está jugada, así que cuentan todas.
+          const vpCards = (p.vpRevealed || 0) + p.devCards.filter(c => c === "victoria").length;
           // Las fuentes de puntos, en el orden en que suman.
           const parts = [
             { n: s.settlementsNow, pts: s.settlementsNow, e: "🏠", label: "poblados" },
