@@ -262,6 +262,73 @@ function Production({ stats, players }) {
   );
 }
 
+
+// ═══════════════════════════════════════════════
+//  RANKING FINAL — cómo cerró la partida y de dónde salió cada punto
+//
+//  El total lo manda `finalScores` (la misma cuenta que decide el ganador);
+//  las columnas lo desarman en sus fuentes, así se ve por qué ganó quien ganó
+//  y no solo el número.
+// ═══════════════════════════════════════════════
+const MEDALS = ["🥇", "🥈", "🥉"];
+
+function Ranking({ stats, players, finalScores, scoreOrder, longestRoad, largestArmy }) {
+  const order = scoreOrder && scoreOrder.length === players.length
+    ? scoreOrder
+    : players.map((_, i) => i).sort((a, b) => finalScores[b] - finalScores[a]);
+
+  return (
+    <Card title="Cómo cerró la partida" right="de dónde salió cada punto">
+      <div className="space-y-2">
+        {order.map((i, pos) => {
+          const p = players[i];
+          const s = stats[i];
+          const vpCards = p.devCards.filter(c => c === "victoria").length;
+          // Las fuentes de puntos, en el orden en que suman.
+          const parts = [
+            { n: s.settlementsNow, pts: s.settlementsNow, e: "🏠", label: "poblados" },
+            { n: s.citiesNow, pts: s.citiesNow * 2, e: "🏙️", label: "ciudades" },
+            { n: vpCards, pts: vpCards, e: "🏆", label: "cartas de punto" },
+            { n: longestRoad === i ? 1 : 0, pts: 2, e: "🛤️", label: "camino más largo", title: true },
+            { n: largestArmy === i ? 1 : 0, pts: 2, e: "⚔️", label: "ejército más grande", title: true },
+          ].filter(x => x.n > 0);
+
+          return (
+            <div key={i} className={`rounded-2xl p-3 ${pos === 0 ? "bg-amber-500/10 ring-1 ring-amber-500/40" : "bg-slate-700/30"}`}>
+              <div className="flex items-center gap-2.5">
+                <span className="text-lg w-6 text-center" aria-hidden="true">{MEDALS[pos] || pos + 1}</span>
+                <span className="w-3.5 h-3.5 rounded-full flex-shrink-0" style={{ background: COLORS[p.ci]?.h }} />
+                <span className="flex-1 min-w-0 text-slate-100 font-bold truncate" title={p.name}>{p.name}</span>
+                <span className="text-amber-300 text-2xl font-black tabular-nums leading-none">{finalScores[i]}</span>
+                <span className="text-muted text-[10px] uppercase">pts</span>
+              </div>
+
+              {/* Desglose: cada fuente con cuántos puntos aportó */}
+              <div className="flex flex-wrap gap-1.5 mt-2 ml-8">
+                {parts.length === 0 ? (
+                  <span className="text-muted text-xs">Sin puntos cargados</span>
+                ) : parts.map(x => (
+                  <span key={x.label} title={`${x.label}: ${x.pts} ${x.pts === 1 ? "punto" : "puntos"}`}
+                    className="text-[11px] bg-slate-800/80 text-slate-300 rounded-lg px-2 py-1 whitespace-nowrap">
+                    {/* Los títulos son uno solo: se nombran; el resto se cuenta. */}
+                    {x.e} {x.title ? x.label : x.n}{" "}
+                    <span className="text-slate-100 font-bold">+{x.pts}</span>
+                  </span>
+                ))}
+              </div>
+
+              {/* Lo que no da puntos pero explica la partida */}
+              <div className="text-muted text-[11px] mt-1.5 ml-8">
+                🛤️ {s.roads} camino{s.roads === 1 ? "" : "s"} · ⚔️ {s.knights} caballero{s.knights === 1 ? "" : "s"} jugado{s.knights === 1 ? "" : "s"} · 🃏 {s.devBought} carta{s.devBought === 1 ? "" : "s"} comprada{s.devBought === 1 ? "" : "s"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 // ═══════════════════════════════════════════════
 //  TABLA POR JUGADOR — el detalle, en números
 // ═══════════════════════════════════════════════
@@ -367,13 +434,16 @@ export default function StatsPanel({
         <Tile label="Más produjo" value={ps[topProducer].producedTotal} sub={players[topProducer]?.name} />
       </div>
 
+      <Ranking stats={ps} players={players} finalScores={finalScores}
+        scoreOrder={scoreOrder} longestRoad={longestRoad} largestArmy={largestArmy} />
+
       <ScoreRace timeline={stats.timeline} players={players} finalScores={finalScores}
         winningScore={winningScore} />
 
-      <Production stats={ps} players={players} />
-
       <PlayerTable stats={ps} players={players} finalScores={finalScores}
         scoreOrder={scoreOrder} longestRoad={longestRoad} largestArmy={largestArmy} />
+
+      <Production stats={ps} players={players} />
 
       {showDice && <DiceStats dice={stats.dice} round={stats.round} history={diceHistory} />}
     </div>
