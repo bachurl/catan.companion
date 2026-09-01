@@ -7,7 +7,7 @@
 //  así el resumen de una partida vieja se puede recalcular sin migraciones.
 // ═══════════════════════════════════════════════
 import { initialGameState, gameReducer, effectiveActions } from "./reducer.js";
-import { computeScores, computeFinalScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE } from "./selectors.js";
+import { computeScores, computeTrueScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE } from "./selectors.js";
 
 const START_TYPES = new Set(["START_GAME", "CREATE_LOBBY"]);
 
@@ -58,7 +58,9 @@ export function summarizeGame(rawActions) {
   // se usa el ts de la creación como inicio.
   if (startedAt === null) startedAt = actions[0].ts || null;
 
-  const finalScores = computeFinalScores(state.players, state.titles);
+  // El historial guarda el puntaje real (incluye las cartas de punto que
+  // nunca se revelaron): es el que decidió la partida.
+  const finalScores = computeTrueScores(state.players, state.titles);
   const baseScores = computeScores(state.players);
   const army = computeLargestArmy(state.players, state.titles);
   const road = computeLongestRoad(state.players, state.titles);

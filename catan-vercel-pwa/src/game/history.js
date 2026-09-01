@@ -11,7 +11,7 @@
 //  la descartaba al recargar porque ya estaba ganada.
 // ═══════════════════════════════════════════════
 import { replayActions } from "./reducer.js";
-import { computeFinalScores, WINNING_SCORE } from "./selectors.js";
+import { computeTrueScores, WINNING_SCORE } from "./selectors.js";
 
 const HISTORY_KEY = "catan.historial.v1";
 // Tope de partidas guardadas. Cada log ronda las 30 KB, así que 20 partidas
@@ -54,7 +54,9 @@ const write = (games) => {
 // de historial no tiene que replayar 20 logs para dibujar una lista.
 export const summarize = (actions) => {
   const state = replayActions(actions);
-  const scores = computeFinalScores(state.players, state.titles);
+  // Puntaje real: la partida ya terminó, así que las cartas de punto que
+  // nunca se revelaron también cuentan (son las que la definieron).
+  const scores = computeTrueScores(state.players, state.titles);
   let winner = null, best = -1;
   scores.forEach((s, i) => { if (s > best) { best = s; winner = i; } });
   return {

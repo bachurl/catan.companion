@@ -46,8 +46,11 @@ export const playerMark = (ci) => COLOR_EMOJI[ci] || "🔘";
 // "full":   classic experience (enforce build costs, dev cards, etc.)
 // "simple": manual dice entry + free-form building, used as a lightweight scorekeeper.
 export const GAME_MODES = {
-  full:   { enforceCosts: true,  manualDiceOnly: false, showDevCards: true  },
-  simple: { enforceCosts: false, manualDiceOnly: true,  showDevCards: false },
+// showDevCards: las cartas de desarrollo existen en los dos modos (el mazo es
+// parte del juego, no del control de recursos). Lo que cambia entre modos es
+// enforceCosts: en Simple se compran sin que la app descuente nada.
+  full:   { enforceCosts: true,  manualDiceOnly: false, showDevCards: true },
+  simple: { enforceCosts: false, manualDiceOnly: true,  showDevCards: true },
 };
 
 // ═══════════════════════════════════════════════

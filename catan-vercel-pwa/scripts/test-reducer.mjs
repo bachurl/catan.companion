@@ -1,9 +1,10 @@
 // Smoke test del reducer: replaya una partida y verifica invariantes.
 // Correr con: npm run test:reducer
 import { gameReducer, initialGameState, replayActions, robberNum, robberRes } from "../src/game/reducer.js";
+import { isGameFinished } from "../src/game/selectors.js";
 import { totalC } from "../src/game/constants.js";
 import { mergeWithLocal } from "../src/online/mergeLog.js";
-import { computeFinalScores, computeLongestRoad, computeLargestArmy } from "../src/game/selectors.js";
+import { computeFinalScores, computeTrueScores, computeLongestRoad, computeLargestArmy, findWinner, hiddenVP } from "../src/game/selectors.js";
 import { computeMatchStats } from "../src/game/stats.js";
 import { gameId, summarize } from "../src/game/history.js";
 
@@ -260,7 +261,10 @@ console.log("CORRECCIONES: cartas de desarrollo, stats, títulos y ciudades:");
   fix.push({ type: "ADJUST_DEV", ts, player: 0, card: "victoria", delta: 1 });
   fs = replayActions(fix);
   assert(fs.players[0].devCards.filter(c => c === "victoria").length === 2, "2 cartas de victoria agregadas");
-  assert(computeFinalScores(fs.players, fs.titles)[0] === 3, "las cartas de victoria suman al puntaje");
+  // Las cartas de punto son secretas: no suman a la vista, sí al puntaje real.
+  assert(computeFinalScores(fs.players, fs.titles)[0] === 1, "las cartas de victoria sin revelar NO suman al puntaje visible");
+  assert(hiddenVP(fs.players[0]) === 2, "quedan como puntos no acreditados");
+  assert(computeTrueScores(fs.players, fs.titles)[0] === 3, "el puntaje real sí las cuenta");
   fix.push({ type: "ADJUST_DEV", ts, player: 0, card: "victoria", delta: -1 });
   fs = replayActions(fix);
   assert(fs.players[0].devCards.filter(c => c === "victoria").length === 1, "sacar una carta funciona");
@@ -524,6 +528,79 @@ console.log("historial de partidas (summarize / gameId):");
   sum = summarize([...won, { ...mk(99), type: "UNDO" }]);
   // Se deshace una ciudad entera: 2 poblados + 3 ciudades = 8.
   assert(sum.scores[0] === 8 && sum.finished === false, "el undo revierte el resumen");
+}
+
+
+// ═══════════════════════════════════════════════
+//  PUNTOS NO ACREDITADOS: la carta de punto guardada decide la partida
+// ═══════════════════════════════════════════════
+console.log("Puntos no acreditados (carta de punto sin revelar):");
+{
+  const base = [
+    {
+      type: "START_GAME", ts, mode: "full",
+      players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }],
+      settlements: { 0: [{ hexes: [{ num: "6", res: "trigo" }] }], 1: [{ hexes: [{ num: "9", res: "madera" }] }] },
+      deck: ["victoria", "caballero"],
+    },
+  ];
+  // Ana llega a 8 puntos a la vista (1 poblado inicial + 3 ciudades libres) y
+  // se guarda una carta de punto.
+  for (let i = 0; i < 3; i++) {
+    base.push({ type: "ADD_FREE_SETTLEMENT", ts, player: 0, hexes: [{ num: "5", res: "oveja" }], isCity: true });
+  }
+  base.push({ type: "ADJUST_DEV", ts, player: 0, card: "victoria", delta: 1 });
+  let st = replayActions(base);
+  assert(computeFinalScores(st.players, st.titles)[0] === 7, "a la vista tiene 7 puntos");
+  assert(computeTrueScores(st.players, st.titles)[0] === 8, "en realidad tiene 8");
+  assert(findWinner(st) === -1, "con 8 reales todavía no gana nadie");
+
+  // Un poblado más: 8 a la vista, 9 reales. Sigue sin ganar.
+  base.push({ type: "ADD_FREE_SETTLEMENT", ts, player: 0, hexes: [{ num: "4", res: "ladrillo" }], isCity: false });
+  st = replayActions(base);
+  assert(computeTrueScores(st.players, st.titles)[0] === 9, "9 reales");
+  assert(findWinner(st) === -1, "con 9 reales tampoco");
+
+  // La ciudad que la lleva a 9 visibles: con la carta guardada son 10 y gana
+  // en su turno, sin haberla mostrado antes.
+  base.push({ type: "ADD_FREE_SETTLEMENT", ts, player: 0, hexes: [{ num: "10", res: "mineral" }], isCity: false });
+  st = replayActions(base);
+  assert(computeFinalScores(st.players, st.titles)[0] === 9, "9 a la vista");
+  assert(computeTrueScores(st.players, st.titles)[0] === 10, "10 reales con la carta guardada");
+  assert(findWinner(st) === 0, "Ana gana en su turno");
+  assert(isGameFinished(st), "la partida está terminada");
+
+  // Revelar la carta la pasa a puntos visibles y no cambia el total real.
+  const revealed = replayActions([...base, { type: "PLAY_DEV", ts, card: "victoria", cardIdx: 0 }]);
+  assert(hiddenVP(revealed.players[0]) === 0, "ya no queda nada oculto");
+  assert(revealed.players[0].vpRevealed === 1, "la carta quedó revelada");
+  assert(computeFinalScores(revealed.players, revealed.titles)[0] === 10, "ahora los 10 se ven");
+  assert(computeTrueScores(revealed.players, revealed.titles)[0] === 10, "el puntaje real no cambió al revelar");
+}
+
+console.log("Una carta comprada este turno no se juega ni se revela:");
+{
+  const acts = [
+    {
+      type: "START_GAME", ts, mode: "full",
+      players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 1 }],
+      settlements: { 0: [{ hexes: [{ num: "6", res: "trigo" }] }], 1: [] },
+      deck: ["victoria", "caballero"],
+    },
+    { type: "MANUAL_ADJUST", ts, player: 0, res: "mineral", delta: 1 },
+    { type: "MANUAL_ADJUST", ts, player: 0, res: "trigo", delta: 1 },
+    { type: "MANUAL_ADJUST", ts, player: 0, res: "oveja", delta: 1 },
+    { type: "BUY_DEV", ts, card: "victoria", player: 0 },
+  ];
+  const bought = replayActions(acts);
+  assert(hiddenVP(bought.players[0]) === 1, "la carta comprada queda oculta");
+  const sameTurn = replayActions([...acts, { type: "PLAY_DEV", ts, card: "victoria", cardIdx: 0 }]);
+  assert(hiddenVP(sameTurn.players[0]) === 1, "revelarla el mismo turno es no-op");
+  const nextTurn = replayActions([...acts,
+    { type: "END_TURN", ts }, { type: "END_TURN", ts },
+    { type: "PLAY_DEV", ts, card: "victoria", cardIdx: 0 },
+  ]);
+  assert(nextTurn.players[0].vpRevealed === 1, "al turno siguiente sí se revela");
 }
 
 console.log("Determinismo (replay dos veces = mismo estado):");

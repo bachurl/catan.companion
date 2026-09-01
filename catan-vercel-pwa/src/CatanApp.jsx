@@ -7,7 +7,7 @@ import {
   playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
 } from "./game/constants";
 import { computeGains, replayActions, effectiveActions, robberNum, robberRes, robberLabel } from "./game/reducer";
-import { computeScores, computeFinalScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
+import { computeScores, computeFinalScores, computeTrueScores, computeLargestArmy, computeLongestRoad, hiddenVP, findWinner, WINNING_SCORE, isGameFinished } from "./game/selectors";
 import { describeAction } from "./game/describe";
 import { computeMatchStats } from "./game/stats";
 import { loadHistory, archiveGame, deleteGame, clearHistory, isArchived } from "./game/history";
@@ -251,15 +251,26 @@ export default function CatanApp() {
   const matchStats = useMemo(() => computeMatchStats(actions), [actions]);
 
   // ── CHECK WIN ──
+  // Gana quien llega a 10 contando también sus cartas de punto sin revelar:
+  // el jugador con 9 a la vista y una carta guardada gana sin haberla
+  // mostrado. `findWinner` lo declara en su turno (los puntos suben ahí).
+  const trueScores = useMemo(() => computeTrueScores(players, game.titles), [players, game.titles]);
   useEffect(() => {
-    const w = finalScores.findIndex(s => s >= WINNING_SCORE);
+    const w = findWinner(game);
     if (w >= 0 && winner === null && winnerAckRef.current !== w) setWinner(w);
     // Si el puntaje del avisado cae por debajo de la meta (corrección o undo),
     // vuelve a estar habilitado para avisar cuando la cruce de nuevo.
-    if (winnerAckRef.current !== null && !(finalScores[winnerAckRef.current] >= WINNING_SCORE)) {
+    if (winnerAckRef.current !== null && !(trueScores[winnerAckRef.current] >= WINNING_SCORE)) {
       winnerAckRef.current = null;
     }
-  }, [finalScores, winner]);
+  }, [game, trueScores, winner]);
+
+  // ── PRIVACIDAD DE LA MANO ──
+  // En una sala, cada celular ve solo sus recursos y sus cartas: de los demás
+  // se ve lo que en la mesa real también se ve (cuántas cartas tienen), nunca
+  // cuáles. Un celular sin jugador reclamado es "la mesa" y ve todo, porque es
+  // el modo en que un solo teléfono lleva la partida de todos.
+  const canSeeHandOf = useCallback((i) => !inRoomAsPlayer || i === myIdx, [inRoomAsPlayer, myIdx]);
 
 
   // ── ARCHIVAR AL TERMINAR ──
@@ -298,6 +309,27 @@ export default function CatanApp() {
     saveCloudGame(actions, { roomCode: online.room?.code || null, seatOwners, force: winner !== null });
   }, [actions, game.started, game.inLobby, winner, online.room, seatOwners, saveCloudGame]);
 
+
+  // ── DESCARTE PROPIO (sala online) ──
+  // El 7 lo tira uno solo, pero descarta cada uno en su celular: al detectar
+  // la tirada, el dispositivo abre el descarte de su jugador si le corresponde
+  // y todavía no lo hizo.
+  useEffect(() => {
+    if (!game.started || !inRoomAsPlayer || modal !== null) return;
+    if (totalC(players[myIdx]?.hand || eHand()) <= 7) return;
+    const eff = effectiveActions(actions);
+    let lastRoll = -1;
+    for (let i = eff.length - 1; i >= 0; i--) {
+      if (eff[i].type === "ROLL") { lastRoll = i; break; }
+    }
+    if (lastRoll === -1) return;
+    const r = eff[lastRoll];
+    if (r.d1 + r.d2 !== 7) return;
+    const yaDescarto = eff.slice(lastRoll).some(a => a.type === "DISCARD" && a.player === myIdx);
+    if (yaDescarto) return;
+    setModalDiscards(eHand());
+    setModal({ type: "discard", queue: [myIdx], current: 0 });
+  }, [game.started, inRoomAsPlayer, myIdx, players, actions, modal]);
 
   // ── AVISO DE TURNO ──
   // En sala online con jugador reclamado: vibración + notificación cuando
@@ -445,7 +477,11 @@ export default function CatanApp() {
 
     if (sum === 7) {
       // Un 7 no modifica manos hasta el descarte, así que `players` (pre-acción) sirve.
-      const needDiscard = players.map((p, i) => ({ idx: i, total: totalC(p.hand) })).filter(x => x.total > 7);
+      // Cada uno descarta en su propio celular: acá solo entran las manos que
+      // este dispositivo puede ver (la propia, o todas si es la mesa).
+      const needDiscard = players
+        .map((p, i) => ({ idx: i, total: totalC(p.hand) }))
+        .filter(x => x.total > 7 && canSeeHandOf(x.idx));
       if (needDiscard.length > 0) {
         setModalDiscards(eHand());
         setModal({ type: "discard", queue: needDiscard.map(x => x.idx), current: 0 });
@@ -603,8 +639,10 @@ export default function CatanApp() {
   };
 
   const playDevCard = (cardType, cardIdx) => {
-    if (players[cp].devCardBought.includes(cardType) && cardType !== "victoria") {
-      showNotif("No podés jugar una carta comprada este turno");
+    if (players[cp].devCardBought.includes(cardType)) {
+      showNotif(cardType === "victoria"
+        ? "Esa carta la levantaste este turno: se revela a partir del próximo"
+        : "No podés jugar una carta comprada este turno");
       return;
     }
     if (players[cp].devCardPlayed && cardType !== "victoria") {
@@ -621,7 +659,10 @@ export default function CatanApp() {
       setModal({ type: "yearOfPlenty", picks: 0 });
     } else if (cardType === "caminos") {
       showNotif("Construcción: +2 caminos");
+    } else if (cardType === "victoria") {
+      showNotif("🏆 Punto de victoria revelado");
     }
+    setModal(m => (m?.type === "playDev" ? null : m));
   };
 
   const applyMonopoly = (res) => {
@@ -1027,7 +1068,7 @@ export default function CatanApp() {
     if (open) {
       const stats = computeMatchStats(open.actions);
       const st = replayActions(open.actions);
-      const scores = computeFinalScores(st.players, st.titles);
+      const scores = computeTrueScores(st.players, st.titles);
       const order = st.players.map((_, i) => i).sort((a, b) => scores[b] - scores[a]);
       const win = open.summary?.winner ?? order[0];
       return (
@@ -1663,7 +1704,13 @@ export default function CatanApp() {
             <div className="bg-slate-800 rounded-3xl p-6 text-center border-2 border-amber-500 mb-4">
               <div className="text-6xl mb-3">🏆</div>
               <h2 className="text-3xl font-bold text-amber-400 mb-1">¡{players[winner].name} gana!</h2>
-              <p className="text-slate-300 text-lg">{finalScores[winner]} puntos de victoria</p>
+              <p className="text-slate-300 text-lg">{trueScores[winner]} puntos de victoria</p>
+              {/* Terminada la partida ya no hay secreto: se dice con qué ganó. */}
+              {hiddenVP(players[winner]) > 0 && (
+                <p className="text-amber-300/90 text-sm mt-1">
+                  incluye {hiddenVP(players[winner])} carta{hiddenVP(players[winner]) === 1 ? "" : "s"} de punto que tenía guardada{hiddenVP(players[winner]) === 1 ? "" : "s"}
+                </p>
+              )}
               <p className="text-muted text-xs mt-2">Ronda {turn} · {matchStats.rollCount} tiradas</p>
               <div className="flex flex-col sm:flex-row gap-2 justify-center mt-5">
                 <button onClick={() => { winnerAckRef.current = winner; setWinner(null); }}
@@ -1916,6 +1963,51 @@ export default function CatanApp() {
                   </div>
                 );
               })()}
+
+              {/* ── CARTAS DE DESARROLLO ──
+                  Acá, junto a la mano, para no tener que buscarlas en otra
+                  pestaña. Son secretas: cada celular ve las suyas. */}
+              {(() => {
+                const owner = inRoomAsPlayer && players[myIdx] ? players[myIdx] : cur;
+                const ownerIdx = inRoomAsPlayer && players[myIdx] ? myIdx : cp;
+                const myTurn = ownerIdx === cp && canAct;
+                const guardados = hiddenVP(owner);
+                // Aviso privado: solo en el celular de su dueño, para que la
+                // mesa no se entere de que tiene la carta que define la partida.
+                const puedeGanar = guardados > 0 && trueScores[ownerIdx] >= WINNING_SCORE;
+                return (
+                  <div className="bg-slate-800 rounded-2xl p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-slate-300 font-semibold">
+                        🃏 Tus cartas de desarrollo ({owner.devCards.length})
+                      </h3>
+                      {owner.vpRevealed > 0 && (
+                        <span className="text-xs text-amber-300 font-bold">🏆 {owner.vpRevealed} revelado{owner.vpRevealed === 1 ? "" : "s"}</span>
+                      )}
+                    </div>
+                    {puedeGanar && (
+                      <p className="text-emerald-300 text-xs bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-2.5 mb-3">
+                        🏆 Con {guardados === 1 ? "tu carta de punto" : `tus ${guardados} cartas de punto`} llegás a {trueScores[ownerIdx]}: revelá para ganar.
+                        Solo lo ves vos.
+                      </p>
+                    )}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => doBuild("desarrollo")} disabled={!canAct}
+                        className="py-3 bg-purple-500/90 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold rounded-xl transition-all">
+                        🃏 Comprar carta
+                      </button>
+                      <button onClick={() => setModal({ type: "playDev" })}
+                        disabled={!myTurn || owner.devCards.length === 0}
+                        className="py-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-100 font-bold rounded-xl transition-all">
+                        ▶️ Jugar carta
+                      </button>
+                    </div>
+                    <p className="text-muted text-[11px] mt-2">
+                      Las cartas y los recursos de cada uno son privados: en una sala, los demás solo ven cuántas tenés.
+                    </p>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -2158,24 +2250,36 @@ export default function CatanApp() {
                     )}
                   </div>
 
-                  {/* Resources */}
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {RES.map(r => (
-                      <div key={r.id} className="flex items-center gap-1">
-                        {canFix && (
-                          <button onClick={() => manualAdjust(i, r.id, -1)}
-                            className="w-5 h-5 bg-slate-700 hover:bg-red-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">−</button>
-                        )}
-                        <div className={`${r.bg} ${r.tx} px-2 py-0.5 rounded text-xs font-bold min-w-8 text-center`}>
-                          {r.e}{p.hand[r.id]}
+                  {/* Recursos: los propios en detalle; los ajenos, solo cuántos
+                      son (que es lo que también se ve en la mesa real). */}
+                  {canSeeHandOf(i) ? (
+                    <div className="flex flex-wrap gap-1.5 mb-3">
+                      {RES.map(r => (
+                        <div key={r.id} className="flex items-center gap-1">
+                          {canFix && (
+                            <button onClick={() => manualAdjust(i, r.id, -1)}
+                              aria-label={`Quitar ${r.n} a ${p.name}`}
+                              className="w-5 h-5 bg-slate-700 hover:bg-red-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">−</button>
+                          )}
+                          <div className={`${r.bg} ${r.tx} px-2 py-0.5 rounded text-xs font-bold min-w-8 text-center`}>
+                            {r.e}{p.hand[r.id]}
+                          </div>
+                          {canFix && (
+                            <button onClick={() => manualAdjust(i, r.id, 1)}
+                              aria-label={`Dar ${r.n} a ${p.name}`}
+                              className="w-5 h-5 bg-slate-700 hover:bg-green-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">+</button>
+                          )}
                         </div>
-                        {canFix && (
-                          <button onClick={() => manualAdjust(i, r.id, 1)}
-                            className="w-5 h-5 bg-slate-700 hover:bg-green-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">+</button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="bg-slate-700/60 text-slate-300 px-2.5 py-1 rounded-lg text-xs font-bold">
+                        🂠 {totalC(p.hand)} carta{totalC(p.hand) === 1 ? "" : "s"} en mano
+                      </span>
+                      <span className="text-muted text-[11px]">sus recursos son secretos</span>
+                    </div>
+                  )}
 
                   {/* Productions */}
                   <div className="flex flex-wrap gap-1">
@@ -2209,7 +2313,12 @@ export default function CatanApp() {
                       Lo que vale es la mesa física; acá se lleva la app a ese estado. */}
                   {canFix && fixOpen === i && (
                     <div className="mt-3 pt-3 border-t border-slate-700 space-y-3">
-                      {mode.showDevCards && (
+                      {mode.showDevCards && !canSeeHandOf(i) && (
+                        <p className="text-muted text-xs">
+                          Las cartas de {p.name} son suyas: se corrigen desde su celular.
+                        </p>
+                      )}
+                      {mode.showDevCards && canSeeHandOf(i) && (
                         <div>
                           <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Cartas de desarrollo</div>
                           <div className="space-y-1">
@@ -2496,6 +2605,48 @@ export default function CatanApp() {
               </div>
             )}
 
+            {/* Jugar (o revelar) una carta de la mano */}
+            {modal.type === "playDev" && (() => {
+              const owner = inRoomAsPlayer && players[myIdx] ? players[myIdx] : cur;
+              return (
+                <div>
+                  <h3 className="text-xl font-bold text-purple-400 mb-2">🃏 Jugar una carta</h3>
+                  <p className="text-slate-300 text-sm mb-4">
+                    Tus cartas. Un punto de victoria se revela para acreditarlo; el resto se juega una por turno.
+                  </p>
+                  <div className="space-y-2 mb-3">
+                    {owner.devCards.length === 0 && (
+                      <p className="text-muted text-sm">No tenés cartas.</p>
+                    )}
+                    {owner.devCards.map((c, i) => {
+                      // Recién comprada: todavía no se puede usar.
+                      const fresca = owner.devCardBought.includes(c);
+                      const usada = owner.devCardPlayed && c !== "victoria";
+                      const bloqueada = fresca || usada;
+                      return (
+                        <button key={i} disabled={bloqueada} onClick={() => playDevCard(c, i)}
+                          className="w-full bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl p-3 flex items-center gap-3 text-left transition-all">
+                          <span className="text-2xl">{DC[c].e}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-white text-sm font-bold">{DC[c].n}</div>
+                            <div className="text-slate-400 text-xs">
+                              {bloqueada ? (fresca ? "La levantaste este turno" : "Ya jugaste una carta este turno") : DC[c].d}
+                            </div>
+                          </div>
+                          <span className="text-xs text-purple-300 font-bold whitespace-nowrap">
+                            {c === "victoria" ? "Revelar" : "Jugar"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button onClick={() => setModal(null)} className="w-full py-3 bg-slate-700 text-slate-300 rounded-xl font-bold">
+                    Cerrar
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* Elegir qué carta de desarrollo salió del mazo físico */}
             {modal.type === "pickDev" && (
               <div>
@@ -2580,8 +2731,12 @@ export default function CatanApp() {
                       if (modal.current < modal.queue.length - 1) {
                         setModalDiscards(eHand());
                         setModal(prev => ({ ...prev, current: prev.current + 1 }));
-                      } else {
+                      } else if (canAct) {
+                        // El ladrón lo mueve quien tiró: si este celular solo
+                        // descartó lo suyo, cierra y listo.
                         setModal({ type: "robber" });
+                      } else {
+                        setModal(null);
                       }
                     }}
                     className={`w-full py-3 rounded-xl font-bold ${discarded === mustDiscard ? "bg-red-600 hover:bg-red-600 text-white" : "bg-slate-700 text-muted cursor-not-allowed"}`}>

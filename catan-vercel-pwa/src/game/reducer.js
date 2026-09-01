@@ -102,7 +102,7 @@ export function gameReducer(state, action) {
       // payload: { mode, playerCount, deck }
       const players = Array.from({ length: action.playerCount }, (_, i) => ({
         name: `Jugador ${i + 1}`, ci: i, productions: [], hand: eHand(),
-        devCards: [], knightsPlayed: 0, roadsBuilt: 0,
+        devCards: [], knightsPlayed: 0, roadsBuilt: 0, vpRevealed: 0,
         ports: [], devCardBought: [], devCardPlayed: false,
       }));
       return { ...initialGameState, inLobby: true, gameMode: action.mode, expansion: !!action.expansion, players, deck: action.deck };
@@ -155,7 +155,7 @@ export function gameReducer(state, action) {
         });
         return {
           name: p.name, ci: p.ci, productions: prods, hand: eHand(),
-          devCards: [], knightsPlayed: 0, roadsBuilt: 0,
+          devCards: [], knightsPlayed: 0, roadsBuilt: 0, vpRevealed: 0,
           ports: [], devCardBought: [], devCardPlayed: false,
         };
       });
@@ -328,14 +328,19 @@ export function gameReducer(state, action) {
           devCardBought: [...p.devCardBought, card],
         };
       });
-      return { ...state, players, deck, log: pushLog(state.log, ts, `🃏 ${state.players[pi].name} compró ${DC[card]?.e || ""} ${DC[card]?.n || "carta de desarrollo"}`) };
+      // El log lo lee toda la mesa: qué carta salió es secreto de su dueño.
+      return { ...state, players, deck, log: pushLog(state.log, ts, `🃏 ${state.players[pi].name} compró una carta de desarrollo`) };
     }
 
     case "PLAY_DEV": {
       // payload: { card, cardIdx } — el efecto de monopolio/abundancia llega en acciones aparte
       const { card, cardIdx } = action;
       const cur = state.players[state.cp];
-      if (cur.devCardBought.includes(card) && card !== "victoria") return state;
+      // Regla de la casa: una carta comprada este turno no se juega ni se
+      // revela hasta el siguiente. Así una carta de punto recién levantada no
+      // termina la partida en el acto.
+      if (cur.devCardBought.includes(card)) return state;
+      // Revelar un punto de victoria no consume la jugada del turno.
       if (cur.devCardPlayed && card !== "victoria") return state;
 
       const removeCard = (p) => { const dc = [...p.devCards]; dc.splice(cardIdx, 1); return dc; };
@@ -350,6 +355,10 @@ export function gameReducer(state, action) {
       } else if (card === "caminos") {
         players = players.map((p, i) => i !== state.cp ? p : ({ ...p, devCards: removeCard(p), roadsBuilt: p.roadsBuilt + 2, devCardPlayed: true }));
         log = pushLog(log, ts, `🛤️ ${cur.name} jugó Construcción (+2 caminos, total: ${cur.roadsBuilt + 2})`);
+      } else if (card === "victoria") {
+        // Revelar: la carta deja de estar oculta y pasa a sumar a la vista.
+        players = players.map((p, i) => i !== state.cp ? p : ({ ...p, devCards: removeCard(p), vpRevealed: (p.vpRevealed || 0) + 1 }));
+        log = pushLog(log, ts, `🏆 ${cur.name} reveló un Punto de Victoria`);
       } else {
         return state;
       }

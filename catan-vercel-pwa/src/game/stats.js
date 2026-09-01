@@ -75,6 +75,9 @@ export function computeMatchStats(actions) {
     stats.length = state.players.length;
   };
 
+  // La carrera de puntos muestra el puntaje *visible* de cada ronda: una carta
+  // de punto guardada no aparece hasta que su dueño la revela, igual que en la
+  // mesa. El ranking final sí la cuenta.
   const pushTimeline = (round, st) => {
     if (!st.started || st.players.length === 0) return;
     const scores = computeFinalScores(st.players, st.titles);

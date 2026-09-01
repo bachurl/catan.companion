@@ -35,6 +35,27 @@ Requiere un proyecto Supabase. Pasos en [.env.example](.env.example):
 
 Sin esas variables la app funciona en modo local/offline y el UI online queda oculto.
 
+## Manos privadas y puntos no acreditados
+
+Los recursos y las cartas de desarrollo de cada jugador son **privados**: en una sala,
+cada celular ve los suyos, y de los demás solo cuántas cartas tienen (lo mismo que se ve
+en la mesa real). El log tampoco canta qué carta salió del mazo, y el descarte por un 7 lo
+hace cada uno en su propio celular.
+
+Las **cartas de punto de victoria** no suman hasta que su dueño las revela, pero la app las
+cuenta por detrás para decidir la partida:
+
+- `computeFinalScores` → puntaje **visible**, el que muestra la app a la mesa.
+- `computeTrueScores` → visible **+ cartas de punto guardadas**; es el que decide quién ganó.
+
+Así, quien tiene 8 puntos a la vista y una carta guardada gana al construir el poblado que lo
+lleva a 9, sin haber tenido que mostrarla antes. La victoria se declara en el turno del jugador
+(los puntos solo suben ahí), y recién entonces el cartel dice con qué ganó. Una carta comprada
+en el turno en curso no se puede jugar ni revelar hasta el siguiente.
+
+Es privacidad de interfaz: la app no muestra la información, pero el log de la partida viaja
+completo por Supabase, así que quien tenga acceso a la base puede leerlo.
+
 ## Historial de partidas
 
 Una partida terminada se archiva sola y se reabre desde **📚 Partidas anteriores**, con las mismas
