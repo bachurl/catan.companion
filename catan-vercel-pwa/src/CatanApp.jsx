@@ -2610,22 +2610,21 @@ export default function CatanApp() {
             {modal.type === "pickDev" && (
               <div>
                 <h3 className="text-xl font-bold text-purple-400 mb-2">🃏 ¿Qué carta salió?</h3>
-                <p className="text-slate-300 text-sm mb-4">Elegí la carta que sacaste del mazo de la mesa, así tu mano en la app coincide con la real.</p>
+                <p className="text-slate-300 text-sm mb-1">Elegí la carta que sacaste del mazo de la mesa, así tu mano en la app coincide con la real.</p>
+                {/* El detalle de cuántas quedan de cada tipo es información oculta:
+                    la app lleva la cuenta, pero solo muestra el total del mazo. */}
+                <p className="text-muted text-xs mb-4">Quedan {deck.length} carta{deck.length === 1 ? "" : "s"} en el mazo.</p>
                 <div className="space-y-2 mb-3">
-                  {Object.entries(DC).map(([key, c]) => {
-                    const left = deck.filter(d => d === key).length;
-                    return (
-                      <button key={key} onClick={() => buyDevCard(key)}
-                        className="w-full bg-slate-700 hover:bg-slate-600 rounded-xl p-3 flex items-center gap-3 text-left transition-all">
-                        <span className="text-2xl">{c.e}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-white text-sm font-bold">{c.n}</div>
-                          <div className="text-slate-400 text-xs">{c.d}</div>
-                        </div>
-                        <span className="text-muted text-xs whitespace-nowrap">{left} en mazo</span>
-                      </button>
-                    );
-                  })}
+                  {Object.entries(DC).map(([key, c]) => (
+                    <button key={key} onClick={() => buyDevCard(key)}
+                      className="w-full bg-slate-700 hover:bg-slate-600 rounded-xl p-3 flex items-center gap-3 text-left transition-all">
+                      <span className="text-2xl">{c.e}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-white text-sm font-bold">{c.n}</div>
+                        <div className="text-slate-400 text-xs">{c.d}</div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
                 <button onClick={() => setModal(null)} className="w-full py-3 bg-slate-700 text-slate-300 rounded-xl font-bold">
                   Cancelar
