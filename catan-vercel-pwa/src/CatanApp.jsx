@@ -11,11 +11,22 @@ import { computeScores, computeFinalScores, computeLargestArmy, computeLongestRo
 import { describeAction } from "./game/describe";
 import { computeMatchStats } from "./game/stats";
 import { loadHistory, archiveGame, deleteGame, clearHistory, isArchived } from "./game/history";
-import { trackEvent, loadErrors, clearErrors, formatErrorsForReport } from "./telemetry";
+import { trackEvent, reportError, loadErrors, clearErrors, formatErrorsForReport } from "./telemetry";
 import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog";
 import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
 import { useGameHistory } from "./history/useGameHistory";
 import { useWakeLock, vibrate } from "./useWakeLock";
+
+// Unirse a una sala no puede quedar colgado sin feedback: si la red o el auth
+// no responden, cortamos con un error legible en vez de dejar el botón en "...".
+const JOIN_TIMEOUT_MS = 15000;
+const withTimeout = (promise, ms, message) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+  ]).finally(() => clearTimeout(timer));
+};
 
 // Acciones de juego que solo despacha el jugador de turno (o un celular "mesa"
 // sin jugador reclamado). Las de corrección también las puede hacer el host.
@@ -202,6 +213,9 @@ export default function CatanApp() {
     try { return (new URLSearchParams(window.location.search).get("sala") || "").toUpperCase(); } catch { return ""; }
   });
   const [joinBusy, setJoinBusy] = useState(false);
+  // Error de "unirse" visible en la pantalla de inicio: ahí no hay toast, así
+  // que si no se muestra acá el usuario ve el botón parpadear y nada más.
+  const [joinError, setJoinError] = useState(null);
   const [modalDiscards, setModalDiscards] = useState(eHand());
   const [modalHexes, setModalHexes] = useState([{ num: "", res: "" }]);
   const [tradeOther, setTradeOther] = useState(0);
@@ -864,9 +878,16 @@ export default function CatanApp() {
   const joinOnlineRoom = async (code) => {
     if (!code.trim()) return;
     setJoinBusy(true);
+    setJoinError(null);
     try {
-      const { actions: remoteActions } = await online.joinRoom(code);
-      if (remoteActions.length === 0) throw new Error("La sala está vacía.");
+      // Si la red o el auth se cuelgan, la promesa nunca resuelve y el botón
+      // queda en "..." para siempre: con timeout al menos hay un error claro.
+      const { actions: remoteActions } = await withTimeout(
+        online.joinRoom(code),
+        JOIN_TIMEOUT_MS,
+        "Sin respuesta del servidor. Revisá la conexión y probá de nuevo.",
+      );
+      if (remoteActions.length === 0) throw new Error("La sala existe pero está vacía: pedile al anfitrión que la vuelva a crear.");
       replaceActions(remoteActions);
       const st = replayActions(remoteActions);
       setSavedGame(null);
@@ -877,7 +898,10 @@ export default function CatanApp() {
       setPhase(st.started ? "game" : "lobby");
       showNotif(st.started ? "🌐 Conectado a la sala" : "🌐 Te uniste. ¡Elegí tu jugador!");
     } catch (e) {
-      showNotif(e.message || "No se pudo conectar");
+      const msg = e?.message || "No se pudo conectar";
+      setJoinError(msg);
+      showNotif(msg, 5000);
+      reportError(e, { where: "joinOnlineRoom", code: code.trim().toUpperCase() });
     }
     setJoinBusy(false);
   };
@@ -904,6 +928,11 @@ export default function CatanApp() {
   if (phase === "mode") return (
     <div className="catan-app">
       <style>{STYLE_CSS}</style>
+      {notif && (
+        <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:40,background:"#1e293b",border:"1px solid rgba(212,168,83,.5)",color:"#f0e6d3",padding:"12px 24px",borderRadius:16,boxShadow:"0 8px 32px rgba(0,0,0,.5)",fontSize:15,fontWeight:700,maxWidth:400,textAlign:"center",fontFamily:"'Nunito',system-ui,sans-serif"}}>
+          {notif}
+        </div>
+      )}
       <div className="catan-container center-screen">
         <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-8 max-w-md w-full text-center shadow-2xl border border-amber-600/30">
           <div className="text-6xl mb-4">🏝️</div>
@@ -1029,7 +1058,7 @@ export default function CatanApp() {
               <div className="flex gap-2">
                 <input
                   value={joinCode}
-                  onChange={e => setJoinCode(e.target.value.toUpperCase())}
+                  onChange={e => { setJoinCode(e.target.value.toUpperCase()); setJoinError(null); }}
                   placeholder="CÓDIGO"
                   maxLength={6}
                   className="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-white text-center font-bold tracking-[.3em] uppercase focus:border-amber-500 focus:outline-none"
@@ -1041,6 +1070,11 @@ export default function CatanApp() {
                   {joinBusy ? "..." : "Unirse"}
                 </button>
               </div>
+              {joinError && (
+                <p className="mt-2 text-left text-sm text-red-300 bg-red-500/10 border border-red-500/40 rounded-xl px-3 py-2">
+                  ⚠️ {joinError}
+                </p>
+              )}
             </div>
           )}
         </div>

@@ -222,14 +222,21 @@ export function useOnlineRoom({ onRemoteAction, onResync }) {
 
   // Se une a una sala existente; devuelve el log completo para replayar.
   const joinRoom = useCallback(async (codeInput) => {
-    const uid = await ensureAnonSession();
+    let uid;
+    try {
+      uid = await ensureAnonSession();
+    } catch (e) {
+      throw new Error(`No se pudo iniciar sesión anónima (${e?.message || "error desconocido"}).`);
+    }
     userIdRef.current = uid;
     setUserId(uid);
     const code = codeInput.trim().toUpperCase();
     const { data: roomRow, error } = await supabase
       .from("rooms").select().eq("code", code).maybeSingle();
-    if (error) throw error;
-    if (!roomRow) throw new Error("Sala no encontrada. Revisá el código.");
+    // El error crudo de Supabase (RLS, JWT, red) no le dice nada al usuario:
+    // se muestra el motivo, pero anunciando que el problema es de conexión.
+    if (error) throw new Error(`No se pudo consultar la sala (${error.message}).`);
+    if (!roomRow) throw new Error(`Sala ${code} no encontrada. Revisá el código.`);
     const { list: all, maxId } = await fetchAllActions(roomRow.id);
     markSeen(all.map(a => a.uid));
     lastServerIdRef.current = maxId;
