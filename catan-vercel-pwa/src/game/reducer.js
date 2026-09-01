@@ -1,4 +1,4 @@
-import { COSTS, RM, DC, GAME_MODES, eHand, totalC, afford } from "./constants.js";
+import { COSTS, RM, DC, GAME_MODES, eHand, totalC } from "./constants.js";
 
 // ═══════════════════════════════════════════════
 //  ESTADO DEL JUEGO — event sourcing
@@ -74,9 +74,11 @@ export const computeGains = (players, num, robber) => {
   });
 };
 
+// El conteo de cartas es una ayuda, no un candado: si la mano no alcanza se
+// descuenta lo que hay y queda en 0 en vez de rechazar la construcción.
 const subCost = (hand, cost) => {
   const nh = { ...hand };
-  Object.entries(cost).forEach(([r, v]) => { nh[r] -= v; });
+  Object.entries(cost).forEach(([r, v]) => { nh[r] = Math.max(0, (nh[r] || 0) - v); });
   return nh;
 };
 
@@ -267,7 +269,6 @@ export function gameReducer(state, action) {
     case "BUILD_ROAD": {
       const pi = action.player ?? state.cp;
       const cost = COSTS.camino;
-      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       const players = state.players.map((p, i) => {
         if (i !== pi) return p;
         return { ...p, hand: mode.enforceCosts ? subCost(p.hand, cost) : p.hand, roadsBuilt: p.roadsBuilt + 1 };
@@ -279,7 +280,6 @@ export function gameReducer(state, action) {
       // payload: { hexes, player? }
       const pi = action.player ?? state.cp;
       const cost = COSTS.poblado;
-      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       const { prods, nextId } = buildProductions(action.hexes, state.nextId);
       const players = state.players.map((p, i) => {
         if (i !== pi) return p;
@@ -296,7 +296,6 @@ export function gameReducer(state, action) {
       // payload: { gid, player? }
       const pi = action.player ?? state.cp;
       const cost = COSTS.ciudad;
-      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       const players = state.players.map((p, i) => {
         if (i !== pi) return p;
         return {
@@ -315,7 +314,6 @@ export function gameReducer(state, action) {
       const cost = COSTS.desarrollo;
       const card = action.card ?? state.deck[0];
       if (!card) return state; // mazo virtual vacío y sin carta explícita
-      if (mode.enforceCosts && !afford(state.players[pi].hand, cost)) return state;
       // Descuenta esa carta del mazo virtual si todavía figuraba.
       const di = state.deck.indexOf(card);
       const deck = di >= 0 ? [...state.deck.slice(0, di), ...state.deck.slice(di + 1)] : state.deck;

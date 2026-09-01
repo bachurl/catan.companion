@@ -53,10 +53,11 @@ s = replayActions(actions);
 assert(s.players[0].roadsBuilt === 1, "camino construido");
 assert(s.players[0].hand.madera === 0 && s.players[0].hand.ladrillo === 0, "costo descontado");
 
-console.log("BUILD_ROAD sin recursos (modo full rechaza):");
+console.log("BUILD_ROAD sin recursos (el conteo no bloquea, la mano no baja de 0):");
 actions.push({ type: "BUILD_ROAD", ts });
 s = replayActions(actions);
-assert(s.players[0].roadsBuilt === 1, "no construye sin recursos");
+assert(s.players[0].roadsBuilt === 2, "construye igual sin recursos");
+assert(s.players[0].hand.madera === 0 && s.players[0].hand.ladrillo === 0, "la mano queda en 0, nunca negativa");
 
 console.log("END_TURN:");
 actions.push({ type: "END_TURN", ts });
@@ -432,10 +433,11 @@ console.log("computeMatchStats (estadísticas en vivo):");
   assert(st.players[1].robbedByOthers === 1 && st.players[1].lost === 1, "a Beto le robaron una");
   assert(st.players[0].turns === 1, "Ana terminó un turno");
 
-  // Una acción rechazada por el reducer (no alcanza para pagar) no cuenta.
+  // Construir sin recursos ya no se rechaza: cuenta, y el gasto se limita a lo
+  // que había en la mano (nunca negativo).
   const broke = [...base, { type: "BUILD_ROAD", ts }];
   st = computeMatchStats(broke);
-  assert(st.players[0].roads === 0, "una construcción rechazada no se cuenta");
+  assert(st.players[0].roads === 1, "una construcción sin recursos igual se cuenta");
 
   // Deshacer: las estadísticas vuelven atrás porque salen del log.
   const undone = [...rolled, { type: "UNDO", ts }];
