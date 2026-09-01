@@ -29,10 +29,32 @@ Requiere un proyecto Supabase. Pasos en [.env.example](.env.example):
 
 1. Crear proyecto en supabase.com
 2. Correr [supabase/schema.sql](supabase/schema.sql) en el SQL Editor
+   (y [supabase/history.sql](supabase/history.sql) para el historial de partidas)
 3. Habilitar Anonymous sign-ins (Authentication → Providers)
 4. Setear `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (sin marcar "Sensitive" en Vercel)
 
 Sin esas variables la app funciona en modo local/offline y el UI online queda oculto.
+
+## Historial de partidas
+
+Una partida terminada se archiva sola y se reabre desde **📚 Partidas anteriores**, con las mismas
+estadísticas que se vieron jugando.
+
+- **En el dispositivo** (`src/game/history.js`): se guarda el **log completo** de las últimas 20
+  partidas, así el detalle se reconstruye entero (no es una foto recortada). Funciona sin Supabase.
+- **En base de datos** (`src/history/`, opcional): además se sube el **resumen** de cada partida
+  (jugadores, puntajes, duración, rondas y todas las tiradas con su número y de quién fue) a las
+  tablas de [supabase/history.sql](supabase/history.sql) — `games`, `game_players`, `game_rolls`,
+  `game_participants`, `profiles`. Las partidas jugadas desde otro celular de la sala aparecen en
+  la misma pantalla, bajo ☁️.
+
+**Sin login**: la sesión anónima de Supabase identifica al dispositivo (`auth.uid()`) y el nombre
+visible se elige en esa misma pantalla. Cada uno ve solo las partidas que jugó. Si más adelante se
+agrega login real, se linkea contra el mismo uid.
+
+El resumen se deriva del log con `summarizeGame` (`src/game/summary.js`) y el id de la partida es el
+uid de su primera acción, así que guardar dos veces la misma partida reescribe sus filas en vez de
+duplicarlas.
 
 ## Consultor de reglas con IA (opcional)
 
@@ -99,5 +121,6 @@ replay es determinístico. Sobre esa base:
 - **Deshacer**: marcador `UNDO` en el log
 - **Online**: el log se replica en Supabase y Realtime lo broadcastea
   (`src/online/useOnlineRoom.js`), con cola offline que resincroniza al reconectar
-- **Estadísticas** (`src/game/stats.js`) e **historial** (`src/game/history.js`): funciones
-  puras del log, así que acompañan deshacer y resync sin lógica propia
+- **Estadísticas** (`src/game/stats.js`), **historial local** (`src/game/history.js`) y **resumen
+  para la nube** (`src/game/summary.js`): funciones puras del log, así que acompañan deshacer y
+  resync sin lógica propia; `src/history/` sube ese resumen a Supabase

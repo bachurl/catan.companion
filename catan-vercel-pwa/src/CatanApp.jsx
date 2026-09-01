@@ -14,6 +14,7 @@ import { loadHistory, archiveGame, deleteGame, clearHistory, isArchived } from "
 import { trackEvent, loadErrors, clearErrors, formatErrorsForReport } from "./telemetry";
 import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog";
 import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
+import { useGameHistory } from "./history/useGameHistory";
 import { useWakeLock, vibrate } from "./useWakeLock";
 
 // Acciones de juego que solo despacha el jugador de turno (o un celular "mesa"
@@ -75,6 +76,10 @@ export default function CatanApp() {
     onRemoteAction: dispatchAction,
     onResync: replaceActions,
   });
+
+  // ── HISTORIAL EN LA NUBE ──
+  // Historial en la nube (opcional): el archivo local lo maneja game/history.js.
+  const cloud = useGameHistory();
 
   const [notif, setNotif] = useState(null);
   const notifTimer = useRef(null);
@@ -256,6 +261,7 @@ export default function CatanApp() {
     }
   }, [finalScores, winner]);
 
+
   // ── ARCHIVAR AL TERMINAR ──
   // Cada vez que la partida está ganada se archiva. Es idempotente por id de
   // partida, así que corregir un puntaje después de ganada actualiza la entrada
@@ -278,6 +284,20 @@ export default function CatanApp() {
       online: Boolean(online.room),
     });
   }, [game, actions, online.room]);
+
+  // ── SINCRONIZAR CON LA NUBE ──
+  // El archivo local (arriba) es la fuente de verdad del dispositivo; esto
+  // sube además el resumen a Supabase, si está configurado, para tener las
+  // partidas en la base y verlas desde otro celular. Sin Supabase no hace nada.
+  const saveCloudGame = cloud.saveGame;
+  const seatOwners = useMemo(() => Object.fromEntries(
+    online.members.filter(m => m.player_index != null).map(m => [m.player_index, m.user_id])
+  ), [online.members]);
+  useEffect(() => {
+    if (actions.length === 0 || !(game.started || game.inLobby)) return;
+    saveCloudGame(actions, { roomCode: online.room?.code || null, seatOwners, force: winner !== null });
+  }, [actions, game.started, game.inLobby, winner, online.room, seatOwners, saveCloudGame]);
+
 
   // ── AVISO DE TURNO ──
   // En sala online con jugador reclamado: vibración + notificación cuando
@@ -878,7 +898,7 @@ export default function CatanApp() {
           )}
 
           {history.length > 0 && (
-            <button onClick={() => { setOpenGameId(null); setPhase("historial"); }}
+            <button onClick={() => { setOpenGameId(null); setPhase("historial"); cloud.refresh(); }}
               className="w-full mb-6 py-3 px-4 rounded-2xl border border-slate-700 bg-slate-800/60 hover:border-slate-600 text-left transition-all flex items-center gap-3">
               <span className="text-2xl">📚</span>
               <span className="flex-1">
@@ -999,6 +1019,9 @@ export default function CatanApp() {
   //  una partida es exactamente lo que se veía mientras se jugaba.
   // ═══════════════════════════════════════════════
   if (phase === "historial") {
+    // Partidas que están en la nube pero no archivadas en este dispositivo
+    // (las jugó otro celular de la sala).
+    const cloudOnly = cloud.games.filter(g => !history.some(h => h.id === g.id));
     const open = openGameId ? history.find(g => g.id === openGameId) : null;
 
     if (open) {
@@ -1061,6 +1084,36 @@ export default function CatanApp() {
               </button>
               <h1 className="text-xl font-bold text-amber-400">📚 Partidas anteriores</h1>
             </div>
+
+            {cloud.isConfigured && (
+              <div className="bg-slate-800 rounded-2xl p-4 mb-4">
+                <label className="block text-xs font-bold text-slate-400 mb-1" htmlFor="perfil-nombre">
+                  TU NOMBRE (para identificarte en las partidas)
+                </label>
+                <input id="perfil-nombre" value={cloud.profileName}
+                  onChange={e => cloud.setProfileName(e.target.value)}
+                  placeholder="Ej: Lucas"
+                  className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-2.5 text-white focus:border-amber-500 focus:outline-none" />
+                <p className="text-muted text-xs mt-2">
+                  Sin cuenta ni contraseña: este dispositivo queda identificado y sus partidas también se guardan en la nube.
+                </p>
+                {cloudOnly.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-slate-700/60">
+                    <p className="text-xs font-bold text-slate-400 mb-2">☁️ TAMBIÉN EN LA NUBE (jugadas en otro dispositivo)</p>
+                    <div className="space-y-1.5">
+                      {cloudOnly.map(g => (
+                        <p key={g.id} className="text-xs text-slate-400">
+                          {g.winnerName ? `🏆 ${g.winnerName}` : "⏳ Sin terminar"}
+                          {" · "}{(g.players || []).map(p => p.name).join(", ") || `${g.playerCount} jugadores`}
+                          {" · "}{g.rollCount || 0} tiradas
+                          {g.roomCode ? ` · sala ${g.roomCode}` : ""}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {history.length === 0 ? (
               <p className="text-slate-400 text-sm bg-slate-800 rounded-2xl p-5">

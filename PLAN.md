@@ -62,6 +62,9 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
 - [x] **C1b** Historial de partidas terminadas: cada partida ganada se archiva con su log completo
   (últimas 20, en el dispositivo) y se puede reabrir con las mismas estadísticas que se vieron jugando.
   Antes una partida terminada se descartaba en silencio al recargar.
+- [x] **C1c** Ese historial, además, en base de datos: el resumen de cada partida (jugadores, puntajes,
+  duración, rondas y todas las tiradas) se sube a Supabase, sin login, y las partidas jugadas desde
+  otro celular aparecen en la misma pantalla.
 - [x] **C2** Meta tags + Open Graph (imagen propia en `public/og.png`, URL absoluta resuelta en build).
   Diagnóstico: los errores se registran en el dispositivo y se pueden copiar desde la app; con
   `VITE_ERROR_ENDPOINT` / `VITE_ANALYTICS_ENDPOINT` además se envían, y sin ellas no se hace ninguna
@@ -95,6 +98,8 @@ sincronización que apareció jugando se corrigió en el PR #35 (issue #24).
 
 - [x] Proyecto Supabase creado, `supabase/schema.sql` corrido, anonymous sign-ins habilitado
 - [x] `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` seteadas en Vercel
+- [ ] `supabase/history.sql` corrido en el SQL Editor — sin eso el historial anda igual, pero solo
+      local en cada dispositivo (no se guarda en la base ni se ve desde otro celular)
 - [x] Proyecto Vercel duplicado (`bachurl-catan.companion`) borrado — fallaba en cada deploy porque
       apuntaba a la raíz del repo, donde no hay `package.json`, y mandaba un mail de error por push
 - [ ] `ANTHROPIC_API_KEY` en Vercel — sin ella el consultor de reglas (❓ Reglas) se reporta no
