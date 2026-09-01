@@ -16,6 +16,9 @@ import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog"
 import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
 import { useGameHistory } from "./history/useGameHistory";
 import { useWakeLock, vibrate } from "./useWakeLock";
+import BoardSvg from "./board/BoardSvg";
+import { layoutFor, LAYOUTS } from "./board/geometry";
+import { generateBoard, randomSeed, boardBalance, DIFFICULTIES } from "./board/generate";
 
 // Acciones de juego que solo despacha el jugador de turno (o un celular "mesa"
 // sin jugador reclamado). Las de corrección también las puede hacer el host.
@@ -186,6 +189,13 @@ export default function CatanApp() {
   const [setupPlayers, setSetupPlayers] = useState([]);
   const [setupIdx, setSetupIdx] = useState(0);
   const [setupData, setSetupData] = useState({});
+  // ── GENERADOR DE MAPAS ──
+  // mapBoard es el mapa elegido para esta partida (null = sin mapa, la app
+  // funciona como siempre). mapPreview es el que se está mirando en la pantalla
+  // del generador, todavía sin confirmar.
+  const [mapBoard, setMapBoard] = useState(null);
+  const [mapPreview, setMapPreview] = useState(null);
+  const [mapDifficulty, setMapDifficulty] = useState("equilibrado");
   const [tab, setTab] = useState("dados");
   const [rolling, setRolling] = useState(false);
   const [manualPickerOpen, setManualPickerOpen] = useState(() => loadPrefManual());
@@ -423,6 +433,27 @@ export default function CatanApp() {
     setPhase("names");
   };
 
+  // ── GENERADOR DE MAPAS ──
+  const mapLayout = layoutFor(pCount, expansion).id;
+
+  const rollMap = (difficulty = mapDifficulty) => {
+    setMapDifficulty(difficulty);
+    setMapPreview(generateBoard({ layout: mapLayout, difficulty, seed: randomSeed() }));
+  };
+
+  const openMapGenerator = () => {
+    setMapPreview(mapBoard && mapBoard.layout === mapLayout
+      ? mapBoard
+      : generateBoard({ layout: mapLayout, difficulty: mapDifficulty, seed: randomSeed() }));
+    setPhase("map");
+  };
+
+  const useThisMap = () => {
+    setMapBoard(mapPreview);
+    setPhase("count");
+    showNotif(`🗺️ Mapa listo (semilla ${mapPreview.seed})`);
+  };
+
   const moveSetupPlayer = (idx, dir) => {
     const newIdx = idx + dir;
     if (newIdx < 0 || newIdx >= setupPlayers.length) return;
@@ -446,6 +477,7 @@ export default function CatanApp() {
       players: setupPlayers.map(p => ({ name: p.name, ci: p.ci })),
       settlements: setupData,
       deck: shuffle([...INIT_DECK]),
+      board: mapBoard,
     });
     setSavedGame(null);
     setWinner(null);
@@ -467,6 +499,8 @@ export default function CatanApp() {
     trackedEndRef.current = null;
     setSetupPlayers([]);
     setSetupData({});
+    setMapBoard(null);
+    setMapPreview(null);
     setModal(null);
     setTab("dados");
     setEditingSeat(null);
@@ -764,7 +798,7 @@ export default function CatanApp() {
       // publicar (el closure todavía no veía la sala) y el primer resync la
       // borraba del estado: pantalla en blanco.
       resetGame(); // descarta cualquier partida local previa
-      const stamped = dispatchAction({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
+      const stamped = dispatchAction({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]), board: mapBoard });
       const r = await online.createRoom([stamped]);
       setSavedGame(null);
       setWinner(null);
@@ -1280,6 +1314,23 @@ export default function CatanApp() {
             </div>
           </button>
         )}
+        <button onClick={openMapGenerator}
+          className={`w-full mb-6 p-3 rounded-2xl border-2 text-left transition-all ${mapBoard ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:bg-slate-800"}`}>
+          <div className="flex items-center gap-3">
+            <div className="text-2xl">🗺️</div>
+            <div className="flex-1">
+              <div className="font-bold text-amber-300 text-sm">
+                {mapBoard ? `Mapa ${DIFFICULTIES[mapBoard.difficulty]?.name || ""} · ${mapBoard.seed}` : "Generar un mapa"}
+              </div>
+              <div className="text-slate-400 text-xs">
+                {mapBoard
+                  ? "Tocá para ver el tablero o generar otro."
+                  : `Tablero ${LAYOUTS[mapLayout].name} al azar, con el grado de dificultad que quieras.`}
+              </div>
+            </div>
+          </div>
+        </button>
+
         {online.isConfigured ? (
           <div className="space-y-3">
             <button onClick={createLobbyRoom} disabled={lobbyBusy}
@@ -1309,6 +1360,80 @@ export default function CatanApp() {
       </div>
     </div>
   );
+
+  // ═══════════════════════════════════════════════
+  //  RENDER: GENERADOR DE MAPAS
+  // ═══════════════════════════════════════════════
+  if (phase === "map") {
+    const balance = mapPreview ? boardBalance(mapPreview) : null;
+    const dificultades = Object.entries(DIFFICULTIES)
+      .filter(([, d]) => !d.onlyBase || mapLayout === "base");
+    return (
+      <div className="catan-app">
+        <style>{STYLE_CSS}</style>
+        <div className="catan-container p-4 max-w-md mx-auto space-y-4">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-amber-400">Generador de mapas</h2>
+            <p className="text-muted text-xs">
+              Tablero {LAYOUTS[mapLayout].name} · hasta {LAYOUTS[mapLayout].maxPlayers} jugadores
+            </p>
+          </div>
+
+          {mapPreview && <BoardSvg board={mapPreview} className="w-full rounded-2xl shadow-2xl" />}
+
+          {balance && (
+            <div className="bg-slate-900/80 rounded-2xl p-3 border border-slate-700 space-y-2">
+              <div className="flex flex-wrap gap-2 justify-center text-xs">
+                {RES.map(r => (
+                  <span key={r.id} className={`${r.bg} ${r.tx} px-2 py-1 rounded-full font-medium`}>
+                    {r.e} {balance.pips[r.id] || 0}
+                  </span>
+                ))}
+              </div>
+              <p className="text-muted text-xs text-center">
+                Puntos de probabilidad por recurso · diferencia {balance.spread}
+                {balance.reds > 0 && ` · ${balance.reds} par${balance.reds > 1 ? "es" : ""} de 6/8 pegados`}
+                {balance.hot > 0 && ` · ${balance.hot} esquina${balance.hot > 1 ? "s" : ""} con tres rojos`}
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2">
+            {dificultades.map(([id, d]) => (
+              <button key={id} onClick={() => rollMap(id)}
+                className={`p-2.5 rounded-xl border-2 text-left transition-all ${mapDifficulty === id ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60"}`}>
+                <div className="font-bold text-amber-300 text-sm">{d.name}</div>
+                <div className="text-slate-400 text-[11px] leading-tight">{d.desc}</div>
+              </button>
+            ))}
+          </div>
+
+          <button onClick={() => rollMap()}
+            className="w-full py-3 bg-slate-700 hover:bg-slate-600 text-slate-100 font-bold rounded-xl transition-all">
+            🎲 Generar otro
+          </button>
+          <button onClick={useThisMap} disabled={!mapPreview}
+            className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 text-slate-900 font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
+            Usar este mapa
+          </button>
+          <p className="text-muted text-xs text-center">
+            Semilla <b className="text-amber-300">{mapPreview?.seed}</b> — con la misma semilla y dificultad
+            sale el mismo mapa.
+          </p>
+          {mapBoard && (
+            <button onClick={() => { setMapBoard(null); setPhase("count"); }}
+              className="w-full py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
+              Jugar sin mapa
+            </button>
+          )}
+          <button onClick={() => setPhase("count")}
+            className="w-full py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
+            ← Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ═══════════════════════════════════════════════
   //  RENDER: SETUP - NAMES
@@ -1705,7 +1830,7 @@ export default function CatanApp() {
   // (p. ej. un resync deja el log vacío en un lobby), antes se devolvía null y
   // la pantalla quedaba en blanco sin forma de salir.
   if (phase !== "game" || !game.started) {
-    if (phase === "mode" || phase === "count" || phase === "names" || phase === "settlements") return null;
+    if (phase === "mode" || phase === "count" || phase === "map" || phase === "names" || phase === "settlements") return null;
     return (
       <div className="catan-container center-screen">
         <style>{STYLE_CSS}</style>
@@ -1732,6 +1857,7 @@ export default function CatanApp() {
     { id: "comerciar", label: "Comerciar", e: "🔄" },
     { id: "cartas", label: "Cartas", e: "🃏", hideInSimple: true },
     { id: "jugadores", label: "Jugadores", e: "👥" },
+    ...(game.board ? [{ id: "mapa", label: "Mapa", e: "🗺️" }] : []),
     { id: "stats", label: "Stats", e: "📊" },
     { id: "log", label: "Log", e: "📋" },
   ].filter(t => mode.showDevCards || !t.hideInSimple);
@@ -1857,7 +1983,7 @@ export default function CatanApp() {
         <div className="flex max-w-2xl mx-auto">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex-1 min-w-0 px-3 py-2.5 text-center text-xs font-medium transition-all whitespace-nowrap ${tab === t.id ? "text-amber-400 border-b-2 border-amber-400 bg-slate-800/50" : "text-slate-400 hover:text-slate-300"}`}>
+              className={`flex-1 shrink-0 px-3 py-2.5 text-center text-xs font-medium transition-all whitespace-nowrap ${tab === t.id ? "text-amber-400 border-b-2 border-amber-400 bg-slate-800/50" : "text-slate-400 hover:text-slate-300"}`}>
               {t.e} {t.label}
             </button>
           ))}
@@ -2367,6 +2493,16 @@ export default function CatanApp() {
               winningScore={WINNING_SCORE}
               showDice
             />
+          )}
+
+          {tab === "mapa" && game.board && (
+            <div className="space-y-3">
+              <BoardSvg board={game.board} className="w-full rounded-2xl" />
+              <p className="text-muted text-xs text-center">
+                Mapa {DIFFICULTIES[game.board.difficulty]?.name || game.board.difficulty} · semilla{" "}
+                <b className="text-amber-300">{game.board.seed}</b>
+              </p>
+            </div>
           )}
 
           {tab === "log" && (

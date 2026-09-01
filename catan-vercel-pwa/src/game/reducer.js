@@ -24,6 +24,9 @@ export const initialGameState = {
   dice: [0, 0],
   deck: [],
   robber: null, // { num, res } — res null = bloquea todo el número (acciones viejas)
+  // Mapa de la partida (generador de mapas). null = partida sin tablero cargado:
+  // los poblados se cargan a mano como siempre y la app funciona igual.
+  board: null,
   turn: 1, // ronda (avanza al completar la vuelta)
   rollCount: 0, // tiradas totales de la partida
   diceTotals: {}, // { 2..12: veces } acumulado sin recorte
@@ -105,7 +108,7 @@ export function gameReducer(state, action) {
         devCards: [], knightsPlayed: 0, roadsBuilt: 0,
         ports: [], devCardBought: [], devCardPlayed: false,
       }));
-      return { ...initialGameState, inLobby: true, gameMode: action.mode, expansion: !!action.expansion, players, deck: action.deck };
+      return { ...initialGameState, inLobby: true, gameMode: action.mode, expansion: !!action.expansion, players, deck: action.deck, board: action.board || null };
     }
 
     case "SET_PLAYER_NAME": {
@@ -144,7 +147,9 @@ export function gameReducer(state, action) {
     }
 
     case "START_GAME": {
-      // payload: { mode, players: [{name, ci}], settlements: {pi: [{hexes:[{num,res}]}]}, deck }
+      // payload: { mode, players: [{name, ci}], settlements: {pi: [{hexes:[{num,res}]}]}, deck, board? }
+      // El tablero viaja dentro de la acción (como el mazo): así el replay sigue
+      // siendo determinístico y el sync online lo reparte a todos los celulares.
       let nextId = 1;
       const players = action.players.map((p, pi) => {
         const prods = [];
@@ -166,6 +171,7 @@ export function gameReducer(state, action) {
         expansion: !!action.expansion,
         players,
         deck: action.deck,
+        board: action.board || null,
         nextId,
         log: pushLog([], ts, `🎲 Empieza ${players[0]?.name || "Jugador 1"}. ¡A jugar!`),
       };
