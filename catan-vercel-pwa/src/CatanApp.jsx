@@ -72,8 +72,18 @@ export default function CatanApp() {
   // ── SALA ONLINE ──
   // Acciones remotas se aplican con dispatchAction directo (sin re-publicar);
   // onResync reemplaza el log entero con el orden canónico del servidor.
+  // Reordenar el turno mueve asientos, y quién controla cada asiento vive en
+  // room_members: cada dispositivo solo puede corregir su propia fila, así que
+  // el swap se aplica localmente en todos (el que lo hizo y los que lo reciben).
+  const followMyClaimRef = useRef(null); // (action) => void, seteado más abajo
+  const onRemoteAction = useCallback((action) => {
+    const stamped = dispatchAction(action);
+    if (action.type === "MOVE_PLAYER") followMyClaimRef.current?.(action);
+    return stamped;
+  }, [dispatchAction]);
+
   const online = useOnlineRoom({
-    onRemoteAction: dispatchAction,
+    onRemoteAction,
     onResync: replaceActions,
   });
 
@@ -107,6 +117,10 @@ export default function CatanApp() {
           showNotif("Solo el anfitrión puede comenzar la partida");
           return null;
         }
+        if (action.type === "MOVE_PLAYER" && !online.room.isHost) {
+          showNotif("Solo el anfitrión puede cambiar el orden de turnos");
+          return null;
+        }
       } else if (online.myPlayerIndex !== game.cp) {
         if (FIX_ACTIONS.has(action.type)) {
           if (!online.room.isHost) {
@@ -125,6 +139,7 @@ export default function CatanApp() {
       }
     }
     const stamped = dispatchAction(action);
+    if (action.type === "MOVE_PLAYER") followMyClaimRef.current?.(action);
     // Sin condicionar por online.room: apenas se crea la sala, la primera
     // acción se despacha en el mismo tick y `online.room` todavía es null en
     // este closure. pushAction ya no hace nada si no hay sala.
@@ -198,6 +213,14 @@ export default function CatanApp() {
   const [rulesMsgs, setRulesMsgs] = useState([]);
   const [rulesBusy, setRulesBusy] = useState(false);
   const [lobbyBusy, setLobbyBusy] = useState(false);
+  // El editor del lobby vive debajo de la lista: al abrirlo se lleva la vista
+  // hasta él, porque si no queda fuera de pantalla y no se ve que se abrió.
+  const seatEditorRef = useRef(null);
+  const scrollToSeatEditor = useCallback(() => {
+    requestAnimationFrame(() => {
+      seatEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, []);
   const [editingSeat, setEditingSeat] = useState(null);
   const [seatLoaded, setSeatLoaded] = useState(null);
   const [seatName, setSeatName] = useState("");
@@ -213,6 +236,21 @@ export default function CatanApp() {
   const isMyTurn = inRoomAsPlayer && myIdx === cp;
   const canAct = !inRoomAsPlayer || isMyTurn;
   const canFix = canAct || Boolean(online.room?.isHost);
+
+  // Mi asiento sigue a mi jugador cuando se reordenan los turnos. Cada
+  // dispositivo corrige solo su propia fila de room_members (es lo único que
+  // le permite RLS), y entre todos el mapeo asiento→celular queda consistente.
+  useEffect(() => {
+    followMyClaimRef.current = (action) => {
+      const mine = online.myPlayerIndex;
+      if (mine === null) return;
+      const other = action.idx + action.dir;
+      if (mine !== action.idx && mine !== other) return;
+      const target = mine === action.idx ? other : action.idx;
+      // `players` es el estado previo al swap: el nombre es el de mi jugador.
+      online.claimPlayer(target, players[mine]?.name || null);
+    };
+  }, [online.myPlayerIndex, online.claimPlayer, players]);
 
   // ── CONSTRUCCIÓN ──
   // Con la expansión 5-6 se puede construir en el turno de otro: en una sala
@@ -743,6 +781,8 @@ export default function CatanApp() {
     }
     setLobbyBusy(false);
   };
+
+  const openSeatEditor = (i) => { setEditingSeat(i); scrollToSeatEditor(); };
 
   const saveSeatName = (seat) => {
     if (seat === null || !seatName.trim() || seatName.trim() === players[seat]?.name) return;
@@ -1489,8 +1529,16 @@ export default function CatanApp() {
 
           {/* Asientos */}
           <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
-            <h2 className="text-lg font-bold text-amber-400 mb-1">Jugadores</h2>
-            <p className="text-slate-400 text-xs mb-4">Cada uno toca “¡Soy yo!” en su jugador, pone su nombre y carga sus 2 poblados iniciales. El orden de la lista es el orden de turnos.</p>
+            <div className="flex items-baseline justify-between gap-3 mb-1">
+              <h2 className="text-lg font-bold text-amber-400">Jugadores</h2>
+              <span className={`text-xs font-bold ${missing.length === 0 ? "text-emerald-400" : "text-amber-300"}`}>
+                {players.length - missing.length}/{players.length} con poblados
+              </span>
+            </div>
+            <p className="text-slate-400 text-xs mb-4">
+              Cada uno toca “¡Soy yo!” en su jugador, pone su nombre y carga sus 2 poblados iniciales.
+              {canEditAny ? " El número es el orden de turnos: cambialo con ▲▼." : " El número es el orden de turnos."}
+            </p>
             <div className="space-y-2">
               {players.map((p, i) => {
                 const owner = online.members.find(m => m.player_index === i);
@@ -1498,6 +1546,7 @@ export default function CatanApp() {
                 const taken = owner && owner.user_id !== online.userId;
                 return (
                   <div key={i} className={`flex items-center gap-3 p-2.5 rounded-xl ${isMine ? "bg-blue-500/15 ring-1 ring-blue-400" : "bg-slate-800/60"}`}>
+                    <span className="text-muted text-xs font-bold w-3 text-right flex-shrink-0" aria-hidden="true">{i + 1}</span>
                     <span className="w-5 h-5 rounded-full flex-shrink-0" style={{backgroundColor: COLORS[p.ci].h}} />
                     <div className="flex-1 min-w-0">
                       <div className="text-white font-semibold text-sm truncate">
@@ -1508,7 +1557,7 @@ export default function CatanApp() {
                       </div>
                     </div>
                     {!taken && !isMine && (
-                      <button onClick={() => { online.claimPlayer(i, p.name); setEditingSeat(null); }}
+                      <button onClick={() => { online.claimPlayer(i, p.name); setEditingSeat(null); scrollToSeatEditor(); }}
                         className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 text-xs font-bold rounded-lg transition-all">
                         ¡Soy yo!
                       </button>
@@ -1520,10 +1569,27 @@ export default function CatanApp() {
                       </button>
                     )}
                     {canEditAny && seat !== i && (
-                      <button onClick={() => setEditingSeat(i)} title="Editar este jugador"
+                      <button onClick={() => openSeatEditor(i)} title={`Editar a ${p.name}`}
+                        aria-label={`Editar a ${p.name}`}
                         className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded-lg">
                         ✏️
                       </button>
+                    )}
+                    {canEditAny && players.length > 1 && (
+                      <div className="flex flex-col gap-0.5">
+                        <button onClick={() => dispatch({ type: "MOVE_PLAYER", idx: i, dir: -1 })}
+                          disabled={i === 0} title={`Subir a ${p.name} en el orden de turnos`}
+                          aria-label={`Subir a ${p.name} en el orden de turnos`}
+                          className="px-2 leading-none text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 disabled:opacity-25 disabled:cursor-not-allowed">
+                          ▲
+                        </button>
+                        <button onClick={() => dispatch({ type: "MOVE_PLAYER", idx: i, dir: 1 })}
+                          disabled={i === players.length - 1} title={`Bajar a ${p.name} en el orden de turnos`}
+                          aria-label={`Bajar a ${p.name} en el orden de turnos`}
+                          className="px-2 leading-none text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 disabled:opacity-25 disabled:cursor-not-allowed">
+                          ▼
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -1533,8 +1599,17 @@ export default function CatanApp() {
 
           {/* Editor del asiento (el propio, o cualquiera para host/mesa) */}
           {seat !== null && players[seat] ? (
-            <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
-              <h2 className="text-lg font-bold text-amber-400 mb-3">{seat === myIdx ? "Tu jugador" : `Editando a ${players[seat].name}`}</h2>
+            <div ref={seatEditorRef} style={{scrollMarginTop:16}}
+              className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <h2 className="text-lg font-bold text-amber-400">{seat === myIdx ? "Tu jugador" : `Editando a ${players[seat].name}`}</h2>
+                {editingSeat !== null && editingSeat !== myIdx && (
+                  <button onClick={() => setEditingSeat(null)}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-semibold rounded-lg transition-all">
+                    ✕ Cerrar
+                  </button>
+                )}
+              </div>
               <label className="text-slate-400 text-xs">Nombre</label>
               <input value={seatName} onChange={e => setSeatName(e.target.value)} onBlur={() => saveSeatName(seat)}
                 placeholder="Nombre"
@@ -1587,9 +1662,25 @@ export default function CatanApp() {
             </div>
           )}
 
-          {/* Comenzar (host o mesa) */}
-          {(isHost || myIdx === null) && (
-            <div className="bg-slate-900/90 backdrop-blur rounded-3xl p-6 shadow-2xl border border-amber-600/30">
+          <button onClick={newGame} className="w-full py-2 text-muted hover:text-slate-300 text-sm font-semibold">
+            ← Salir de la sala
+          </button>
+
+          {/* Espacio para que la barra fija no tape el final del contenido */}
+          {(isHost || myIdx === null) && <div style={{height:96}} aria-hidden="true" />}
+        </div>
+
+        {/* Comenzar (host o mesa): fijo al pie, para que no haya que buscarlo
+            abajo de la lista ni del editor. */}
+        {(isHost || myIdx === null) && (
+          <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:30,padding:"12px 16px",
+            background:"linear-gradient(to top, rgba(15,23,42,.98) 60%, rgba(15,23,42,0))"}}>
+            <div className="max-w-lg mx-auto">
+              {missing.length > 0 && (
+                <p className="text-amber-300/90 text-xs mb-2 text-center">
+                  Faltan poblados de: {missing.map(p => p.name).join(", ")}
+                </p>
+              )}
               <button onClick={() => {
                   dispatch({ type: "BEGIN_GAME" });
                   trackEvent("partida_iniciada", {
@@ -1597,19 +1688,12 @@ export default function CatanApp() {
                     expansion: !!game.expansion, online: true,
                   });
                 }}
-                className="w-full py-3 bg-green-500 hover:bg-green-400 text-slate-900 font-bold rounded-xl text-lg transition-all">
+                className="w-full py-3.5 bg-green-500 hover:bg-green-400 text-slate-900 font-bold rounded-xl text-lg transition-all shadow-2xl">
                 🎲 ¡Comenzar partida!
               </button>
-              {missing.length > 0 && (
-                <p className="text-amber-300/80 text-xs mt-2 text-center">Faltan poblados de: {missing.map(p => p.name).join(", ")}</p>
-              )}
             </div>
-          )}
-
-          <button onClick={newGame} className="w-full py-2 text-muted hover:text-slate-300 text-sm font-semibold">
-            ← Salir de la sala
-          </button>
-        </div>
+          </div>
+        )}
       </div>
     );
   }
