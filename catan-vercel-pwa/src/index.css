@@ -1,3 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Texto tenue (leyendas, notas al pie, unidades). slate-500 daba 2.7-3.1:1
+   sobre las cards oscuras de la app y no llegaba al 4.5:1 de WCAG AA. Este
+   tono llega a 4.8:1 en la superficie más clara que usamos y sigue quedando
+   más apagado que slate-400, así que la jerarquía de grises no se aplana. */
+.text-muted { color: #90a0b4; }

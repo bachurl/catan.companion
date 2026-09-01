@@ -1,0 +1,5 @@
+# La app es una PWA de una sola pantalla: no hay nada que indexar por dentro,
+# pero sin este archivo el SPA devuelve index.html en /robots.txt y los
+# crawlers lo leen como un robots.txt inválido.
+User-agent: *
+Allow: /

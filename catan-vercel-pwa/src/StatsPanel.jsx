@@ -28,7 +28,7 @@ const Tile = ({ label, value, sub }) => (
   <div className="bg-slate-700/40 rounded-xl py-2 px-1 text-center">
     <div className="text-slate-400 text-[10px] uppercase tracking-wider">{label}</div>
     <div className="text-amber-300 text-xl font-black leading-tight">{value}</div>
-    {sub ? <div className="text-slate-500 text-[10px]">{sub}</div> : null}
+    {sub ? <div className="text-muted text-[10px]">{sub}</div> : null}
   </div>
 );
 
@@ -38,7 +38,7 @@ const Card = ({ title, right, children }) => (
   <div className="bg-slate-800 rounded-2xl p-4">
     <div className="flex items-center justify-between mb-3">
       <h3 className="text-slate-300 font-semibold">{title}</h3>
-      {right ? <span className="text-slate-500 text-xs">{right}</span> : null}
+      {right ? <span className="text-muted text-xs">{right}</span> : null}
     </div>
     {children}
   </div>
@@ -55,7 +55,7 @@ const Bar = ({ value, max, color, label, mark }) => (
       }} />
     </div>
     <span className="text-slate-300 text-xs font-bold w-6 text-right tabular-nums shrink-0">{value}</span>
-    {label ? <span className="text-slate-500 text-[10px] w-14 shrink-0">{label}</span> : null}
+    {label ? <span className="text-muted text-[10px] w-14 shrink-0">{label}</span> : null}
   </div>
 );
 
@@ -66,7 +66,7 @@ export function DiceStats({ dice, round, history = [] }) {
   if (!dice || dice.total === 0) {
     return (
       <Card title="Tiradas" right={`Ronda ${round}`}>
-        <p className="text-slate-500 text-sm">Todavía no hay tiradas en esta partida.</p>
+        <p className="text-muted text-sm">Todavía no hay tiradas en esta partida.</p>
       </Card>
     );
   }
@@ -102,7 +102,7 @@ export function DiceStats({ dice, round, history = [] }) {
               }} />
             </div>
             <span className="text-[10px] text-slate-400">{n}</span>
-            <span className="text-[9px] text-slate-500">{count}</span>
+            <span className="text-[9px] text-muted">{count}</span>
           </div>
         ))}
       </div>
@@ -114,7 +114,7 @@ export function DiceStats({ dice, round, history = [] }) {
         <Tile label="Sin 7 hace" value={dice.since7 === null ? "—" : dice.since7}
           sub={dice.since7 === null ? "todavía ninguno" : "tiradas"} />
       </div>
-      <p className="text-slate-500 text-xs mt-3">
+      <p className="text-muted text-xs mt-3">
         La línea punteada es lo esperado por probabilidad (6 y 8 son los más probables). Ojo: los dados no tienen
         memoria — que un número venga frío no lo hace más probable en la próxima.
       </p>
@@ -210,7 +210,7 @@ function ScoreRace({ timeline, players, finalScores, winningScore }) {
           </span>
         ))}
       </div>
-      <p className="text-slate-500 text-[11px] mt-2">
+      <p className="text-muted text-[11px] mt-2">
         Incluye cartas de punto de victoria y los +2 de camino más largo / ejército más grande, así que puede
         subir sin que se construya nada.
       </p>
@@ -227,7 +227,7 @@ function Production({ stats, players }) {
   if (!anything) {
     return (
       <Card title="Producción">
-        <p className="text-slate-500 text-sm">Cuando empiecen a salir números se llena solo.</p>
+        <p className="text-muted text-sm">Cuando empiecen a salir números se llena solo.</p>
       </Card>
     );
   }
@@ -292,7 +292,7 @@ function PlayerTable({ stats, players, finalScores, scoreOrder, longestRoad, lar
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr>
-              <th className="text-left text-slate-500 text-[10px] uppercase tracking-wider font-medium pb-2 pr-2 sticky left-0 bg-slate-800">
+              <th className="text-left text-muted text-[10px] uppercase tracking-wider font-medium pb-2 pr-2 sticky left-0 bg-slate-800">
                 &nbsp;
               </th>
               {order.map(i => (
@@ -334,7 +334,7 @@ function PlayerTable({ stats, players, finalScores, scoreOrder, longestRoad, lar
           </tbody>
         </table>
       </div>
-      <p className="text-slate-500 text-[11px] mt-3">
+      <p className="text-muted text-[11px] mt-3">
         <strong className="text-slate-400">🎲 Dados</strong> son los puntos de probabilidad de tus hexágonos
         (un 6 vale 5, un 2 vale 1; las ciudades cuentan doble): cuánta producción esperás por tirada.
         Los caminos son los que se cargaron en la app, no los del tablero.
