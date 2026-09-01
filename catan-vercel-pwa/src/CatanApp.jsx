@@ -209,6 +209,7 @@ export default function CatanApp() {
   const [tradeReceive, setTradeReceive] = useState(eHand());
   // Lobby: asiento en edición (null = el jugador reclamado) + editor local
   const [fixOpen, setFixOpen] = useState(null); // jugador con el panel de correcciones abierto
+  const [handOpen, setHandOpen] = useState(null); // jugador con la mano visible (privada por defecto)
   const [rulesQ, setRulesQ] = useState("");
   const [rulesMsgs, setRulesMsgs] = useState([]);
   const [rulesBusy, setRulesBusy] = useState(false);
@@ -586,17 +587,14 @@ export default function CatanApp() {
         return;
       }
       const cost = COSTS[type];
-      if (!afford(builder.hand, cost)) {
-        showNotif("No se puede: te faltan recursos");
-        return;
-      }
+      // El conteo de cartas es una ayuda, no un candado: la mesa física manda.
+      if (!afford(builder.hand, cost)) showNotif("⚠️ Según el conteo te faltan recursos (podés seguir igual)");
     }
     setModal({ type: "confirmBuild", buildType: type });
   };
 
   const doBuild = (type) => {
     const cost = COSTS[type];
-    if (mode.enforceCosts && !afford(builder.hand, cost)) { showNotif("No tenés suficientes recursos"); return; }
 
     if (type === "camino") {
       dispatch({ type: "BUILD_ROAD", player: buildIdx });
@@ -1799,7 +1797,11 @@ export default function CatanApp() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {robberNum(robber) !== null && <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">🦹 {robberLabel(robber)}</span>}
+            <button onClick={() => setModal({ type: "robber", num: robberNum(robber) ?? undefined })}
+              className={`text-xs px-2 py-1 rounded-full transition-all ${robberNum(robber) !== null ? "bg-red-900 hover:bg-red-800 text-red-300" : "bg-slate-700 hover:bg-slate-600 text-slate-300"}`}
+              title="Mover el ladrón">
+              🦹 {robberNum(robber) !== null ? robberLabel(robber) : "Ladrón"}
+            </button>
             {online.isConfigured && (
               <button onClick={() => setModal({ type: "online" })}
                 className="relative w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 rounded-lg text-base transition-all"
@@ -2032,21 +2034,23 @@ export default function CatanApp() {
                   🏗️ <b>Fase de construcción especial</b> (expansión 5-6): construyendo para <b>{builder.name}</b> en el turno de {cur.name}.
                 </p>
               )}
-              {Object.entries(COSTS)
-                .filter(([type]) => mode.showDevCards || type !== "desarrollo")
-                .map(([type, cost]) => {
+              {Object.entries(COSTS).map(([type, cost]) => {
+                // Los recursos nunca bloquean: solo avisan. Lo único que frena
+                // es no tener el turno (o no haber tirado, en modo completo).
                 const canBuild = canBuildNow && (mode.enforceCosts
-                  ? (afford(builder.hand, cost) && (buildingForOther || turnPhase === "rolled"))
+                  ? (buildingForOther || turnPhase === "rolled")
                   : true);
+                const short = mode.enforceCosts && !afford(builder.hand, cost);
                 return (
                   <div key={type} className="bg-slate-800 rounded-2xl p-4 flex items-center justify-between">
                     <div>
                       <div className="text-white font-bold">{COST_EMOJI[type]} {COST_NAMES[type]}</div>
                       {mode.enforceCosts && (
-                        <div className="flex gap-1 mt-1">
+                        <div className="flex gap-1 mt-1 items-center">
                           {Object.entries(cost).map(([r, v]) => (
                             <ResBadge key={r} id={r} count={v} small />
                           ))}
+                          {short && <span className="text-[10px] text-amber-300/80 ml-1">te faltan (podés igual)</span>}
                         </div>
                       )}
                     </div>
@@ -2242,24 +2246,46 @@ export default function CatanApp() {
                     )}
                   </div>
 
-                  {/* Resources */}
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {RES.map(r => (
-                      <div key={r.id} className="flex items-center gap-1">
-                        {canFix && (
-                          <button onClick={() => manualAdjust(i, r.id, -1)}
-                            className="w-5 h-5 bg-slate-700 hover:bg-red-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">−</button>
-                        )}
-                        <div className={`${r.bg} ${r.tx} px-2 py-0.5 rounded text-xs font-bold min-w-8 text-center`}>
-                          {r.e}{p.hand[r.id]}
+                  {/* Resources — la mano es privada: solo se ve el total.
+                      El detalle se abre a pedido (o siempre para tu propio jugador). */}
+                  {(() => {
+                    const isMine = inRoomAsPlayer && myIdx === i;
+                    const open = isMine || handOpen === i;
+                    return (
+                      <div className="mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs bg-slate-700 text-slate-200 px-2 py-1 rounded-lg font-bold">
+                            🎴 {totalC(p.hand)} carta{totalC(p.hand) === 1 ? "" : "s"}
+                          </span>
+                          {!isMine && (
+                            <button onClick={() => setHandOpen(open ? null : i)}
+                              className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-1 rounded-lg">
+                              {open ? "🙈 Ocultar mano" : "👁️ Ver mano"}
+                            </button>
+                          )}
                         </div>
-                        {canFix && (
-                          <button onClick={() => manualAdjust(i, r.id, 1)}
-                            className="w-5 h-5 bg-slate-700 hover:bg-green-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">+</button>
+                        {open && (
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {RES.map(r => (
+                              <div key={r.id} className="flex items-center gap-1">
+                                {canFix && (
+                                  <button onClick={() => manualAdjust(i, r.id, -1)}
+                                    className="w-5 h-5 bg-slate-700 hover:bg-red-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">−</button>
+                                )}
+                                <div className={`${r.bg} ${r.tx} px-2 py-0.5 rounded text-xs font-bold min-w-8 text-center`}>
+                                  {r.e}{p.hand[r.id]}
+                                </div>
+                                {canFix && (
+                                  <button onClick={() => manualAdjust(i, r.id, 1)}
+                                    className="w-5 h-5 bg-slate-700 hover:bg-green-700 text-slate-400 hover:text-white rounded text-xs flex items-center justify-center">+</button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
                         )}
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
 
                   {/* Productions */}
                   <div className="flex flex-wrap gap-1">
