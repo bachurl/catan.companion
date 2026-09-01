@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test:reducer": "node scripts/test-reducer.mjs",
     "test:summary": "node scripts/test-summary.mjs",
-    "test": "node scripts/test-reducer.mjs && node scripts/test-summary.mjs"
+    "test": "node scripts/test-reducer.mjs && node scripts/test-summary.mjs && node scripts/test-board.mjs",
+    "test:board": "node scripts/test-board.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.72.0",

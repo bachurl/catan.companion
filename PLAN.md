@@ -89,12 +89,12 @@ carga como una lista suelta de `{num, res}` (ver `reducer.js:56`, "la app no tie
 tablero"). Por eso E1 es el cimiento compartido y conviene hacerlo primero, aunque después E2 y E3
 puedan avanzar en paralelo.
 
-### E1 — Modelo de tablero (cimiento compartido)
+### E1 — Modelo de tablero (cimiento compartido) — ✅ hecho
 
-- `src/board/geometry.js`: hexágonos en coordenadas axiales (`q, r`), con los layouts clásicos
-  (19 hexágonos, hasta 4 jugadores) y de expansión (30 hexágonos, hasta 6). Derivar de ahí los
-  **vértices** (54 / 84) y las **aristas** (72 / 114) con IDs canónicos y estables, más los vecinos
-  vértice→hexágonos, que es lo único que el motor necesita para producir recursos.
+- `src/board/geometry.js`: hexágonos por filas, con los layouts clásico (19 hexágonos, filas
+  3-4-5-4-3, hasta 4 jugadores) y de expansión (30 hexágonos, filas 3-4-5-6-5-4-3, hasta 6). De ahí
+  salen los **vértices** (54 / 80) y las **aristas** (72 / 109) con IDs estables, los vecinos
+  vértice→hexágonos y las aristas del borde donde van los puertos.
 - Forma del estado: `board = { layout: "base"|"ext", hexes: [{id, q, r, res, num}], ports:
   [{vertices:[vA,vB], type:"3:1"|<recurso>}], robber: <hexId> }`, y en cada jugador
   `settlements: [{vertex, isCity}]` / `roads: [edgeId]`.
@@ -107,18 +107,20 @@ puedan avanzar en paralelo.
   (hoy es `num + res + jugadores`, un workaround), los puertos dejan de cargarse a mano y las
   estadísticas pueden mostrar producción por hexágono.
 
-### E2 — Generador de mapas
+### E2 — Generador de mapas — ✅ hecho
 
 - **Motor** (`src/board/generate.js`, puro y testeable): baraja terrenos y fichas numéricas según el
   layout (4 o 6 jugadores) y aplica las restricciones según el **grado de dificultad** elegido:
   - *Oficial*: distribución del reglamento (fichas en espiral desde una esquina) — reproduce el
-    tablero "de caja".
+    tablero "de caja". Solo para el clásico: en la expansión no hay una espiral equivalente en el
+    reglamento, así que ahí la opción no se ofrece.
   - *Equilibrado*: aleatorio con reglas — nunca 6 y 8 adyacentes, ni dos números iguales adyacentes,
     ningún vértice con más de 2 fichas rojas, y varianza de "pips" por recurso acotada.
   - *Aleatorio*: sin restricciones, sale lo que sale.
   - *Caótico*: busca activamente lo desparejo (clusters de números altos, recursos agrupados).
-  Implementación: generar y validar con reintentos (rechazo), con semilla explícita para que un
-  mapa se pueda compartir y regenerar igual.
+  Implementación: las fichas se colocan una por una eligiendo solo entre las que no rompen ninguna
+  regla (con reintento si se traba), porque generar al azar y descartar casi nunca cierra con 28
+  fichas. Semilla explícita para poder compartir y regenerar el mismo mapa.
 - **Render** (`src/board/BoardSvg.jsx`): SVG puro, sin dependencias nuevas — hexágonos con color de
   recurso, ficha con número y puntos de probabilidad (ya existe `dotStr`), puertos en el borde,
   ladrón en el desierto. El mismo componente sirve para previsualizar, para elegir vértices y para
@@ -126,7 +128,9 @@ puedan avanzar en paralelo.
 - **Pantalla**: cantidad de jugadores (3-4 base / 5-6 expansión, coherente con el setup actual),
   dificultad, botón "Generar otro", indicadores de balance (pips por recurso, choques de 6/8) y
   **"Usar este mapa"**, que fija el `board` de la partida.
-- **Extras baratos**: compartir el mapa por link/código de semilla e imprimirlo/guardarlo como
+- **Ya integrado**: el mapa elegido viaja en la acción de inicio (`START_GAME` / `CREATE_LOBBY`) y
+  queda visible durante la partida en la pestaña 🗺️ Mapa.
+- **Pendiente del generador**: compartir el mapa por link con la semilla e imprimirlo/guardarlo como
   imagen para armar el tablero físico.
 
 ### E3 — Cargar el tablero desde una foto
@@ -153,8 +157,8 @@ puedan avanzar en paralelo.
 
 ### Orden sugerido
 
-1. **E1** geometría + modelo + render SVG (con tests en `scripts/`, como `test-reducer.mjs`).
-2. **E2** generador + pantalla de previsualización + "Usar este mapa" — entrega valor solo.
+1. ~~**E1** geometría + modelo + render SVG~~ — hecho (`src/board/`, tests en `scripts/test-board.mjs`).
+2. ~~**E2** generador + pantalla de previsualización + "Usar este mapa"~~ — hecho.
 3. **E1b** selección de poblados tocando el tablero (reemplaza el tipeo de `{num,res}` cuando hay
    board, en setup individual y en el lobby online).
 4. **E3** foto → JSON → corrección → aplicar, primero para el setup inicial y después para

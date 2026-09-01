@@ -4,7 +4,7 @@ import { DiceFace, ResBadge } from "./components";
 import StatsPanel, { DiceStats } from "./StatsPanel";
 import {
   RES, RM, NUMS, COSTS, COST_NAMES, COST_EMOJI, INIT_DECK, DC, COLORS,
-  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
+  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand,
 } from "./game/constants";
 import { computeGains, replayActions, effectiveActions, robberNum, robberRes, robberLabel } from "./game/reducer";
 import { computeScores, computeFinalScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
@@ -16,6 +16,10 @@ import { useGameLog, loadSavedGame, clearSavedActions } from "./game/useGameLog"
 import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
 import { useGameHistory } from "./history/useGameHistory";
 import { useWakeLock, vibrate } from "./useWakeLock";
+import BoardSvg from "./board/BoardSvg";
+import HexSelect from "./board/HexSelect";
+import { layoutFor, LAYOUTS } from "./board/geometry";
+import { generateBoard, randomSeed, boardBalance, DIFFICULTIES } from "./board/generate";
 
 // Unirse a una sala no puede quedar colgado sin feedback: si la red o el auth
 // no responden, cortamos con un error legible en vez de dejar el botón en "...".
@@ -197,6 +201,13 @@ export default function CatanApp() {
   const [setupPlayers, setSetupPlayers] = useState([]);
   const [setupIdx, setSetupIdx] = useState(0);
   const [setupData, setSetupData] = useState({});
+  // ── GENERADOR DE MAPAS ──
+  // mapBoard es el mapa elegido para esta partida (null = sin mapa, la app
+  // funciona como siempre). mapPreview es el que se está mirando en la pantalla
+  // del generador, todavía sin confirmar.
+  const [mapBoard, setMapBoard] = useState(null);
+  const [mapPreview, setMapPreview] = useState(null);
+  const [mapDifficulty, setMapDifficulty] = useState("equilibrado");
   const [tab, setTab] = useState("dados");
   const [rolling, setRolling] = useState(false);
   const [manualPickerOpen, setManualPickerOpen] = useState(() => loadPrefManual());
@@ -438,6 +449,27 @@ export default function CatanApp() {
     setPhase("names");
   };
 
+  // ── GENERADOR DE MAPAS ──
+  const mapLayout = layoutFor(pCount, expansion).id;
+
+  const rollMap = (difficulty = mapDifficulty) => {
+    setMapDifficulty(difficulty);
+    setMapPreview(generateBoard({ layout: mapLayout, difficulty, seed: randomSeed() }));
+  };
+
+  const openMapGenerator = () => {
+    setMapPreview(mapBoard && mapBoard.layout === mapLayout
+      ? mapBoard
+      : generateBoard({ layout: mapLayout, difficulty: mapDifficulty, seed: randomSeed() }));
+    setPhase("map");
+  };
+
+  const useThisMap = () => {
+    setMapBoard(mapPreview);
+    setPhase("count");
+    showNotif(`🗺️ Mapa listo (semilla ${mapPreview.seed})`);
+  };
+
   const moveSetupPlayer = (idx, dir) => {
     const newIdx = idx + dir;
     if (newIdx < 0 || newIdx >= setupPlayers.length) return;
@@ -461,6 +493,7 @@ export default function CatanApp() {
       players: setupPlayers.map(p => ({ name: p.name, ci: p.ci })),
       settlements: setupData,
       deck: shuffle([...INIT_DECK]),
+      board: mapBoard,
     });
     setSavedGame(null);
     setWinner(null);
@@ -482,6 +515,8 @@ export default function CatanApp() {
     trackedEndRef.current = null;
     setSetupPlayers([]);
     setSetupData({});
+    setMapBoard(null);
+    setMapPreview(null);
     setModal(null);
     setTab("dados");
     setEditingSeat(null);
@@ -776,7 +811,7 @@ export default function CatanApp() {
       // publicar (el closure todavía no veía la sala) y el primer resync la
       // borraba del estado: pantalla en blanco.
       resetGame(); // descarta cualquier partida local previa
-      const stamped = dispatchAction({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]) });
+      const stamped = dispatchAction({ type: "CREATE_LOBBY", mode: gameMode, expansion, playerCount: pCount, deck: shuffle([...INIT_DECK]), board: mapBoard });
       const r = await online.createRoom([stamped]);
       setSavedGame(null);
       setWinner(null);
@@ -817,9 +852,9 @@ export default function CatanApp() {
     showNotif("💾 Poblados guardados");
   };
 
-  const updateLobbyHex = (si, hi, field, val) => setLobbySett(prev => {
+  const updateLobbyHex = (si, hi, patch) => setLobbySett(prev => {
     const np = prev.map(s => ({ hexes: s.hexes.map(h => ({ ...h })) }));
-    np[si].hexes[hi][field] = val;
+    np[si].hexes[hi] = { ...np[si].hexes[hi], ...patch };
     return np;
   });
   const addLobbyHex = (si) => setLobbySett(prev => {
@@ -1312,6 +1347,23 @@ export default function CatanApp() {
             </div>
           </button>
         )}
+        <button onClick={openMapGenerator}
+          className={`w-full mb-6 p-3 rounded-2xl border-2 text-left transition-all ${mapBoard ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60 hover:bg-slate-800"}`}>
+          <div className="flex items-center gap-3">
+            <div className="text-2xl">🗺️</div>
+            <div className="flex-1">
+              <div className="font-bold text-amber-300 text-sm">
+                {mapBoard ? `Mapa ${DIFFICULTIES[mapBoard.difficulty]?.name || ""} · ${mapBoard.seed}` : "Generar un mapa"}
+              </div>
+              <div className="text-slate-400 text-xs">
+                {mapBoard
+                  ? "Tocá para ver el tablero o generar otro."
+                  : `Tablero ${LAYOUTS[mapLayout].name} al azar, con el grado de dificultad que quieras.`}
+              </div>
+            </div>
+          </div>
+        </button>
+
         {online.isConfigured ? (
           <div className="space-y-3">
             <button onClick={createLobbyRoom} disabled={lobbyBusy}
@@ -1341,6 +1393,80 @@ export default function CatanApp() {
       </div>
     </div>
   );
+
+  // ═══════════════════════════════════════════════
+  //  RENDER: GENERADOR DE MAPAS
+  // ═══════════════════════════════════════════════
+  if (phase === "map") {
+    const balance = mapPreview ? boardBalance(mapPreview) : null;
+    const dificultades = Object.entries(DIFFICULTIES)
+      .filter(([, d]) => !d.onlyBase || mapLayout === "base");
+    return (
+      <div className="catan-app">
+        <style>{STYLE_CSS}</style>
+        <div className="catan-container p-4 max-w-md mx-auto space-y-4">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-amber-400">Generador de mapas</h2>
+            <p className="text-muted text-xs">
+              Tablero {LAYOUTS[mapLayout].name} · hasta {LAYOUTS[mapLayout].maxPlayers} jugadores
+            </p>
+          </div>
+
+          {mapPreview && <BoardSvg board={mapPreview} className="w-full rounded-2xl shadow-2xl" />}
+
+          {balance && (
+            <div className="bg-slate-900/80 rounded-2xl p-3 border border-slate-700 space-y-2">
+              <div className="flex flex-wrap gap-2 justify-center text-xs">
+                {RES.map(r => (
+                  <span key={r.id} className={`${r.bg} ${r.tx} px-2 py-1 rounded-full font-medium`}>
+                    {r.e} {balance.pips[r.id] || 0}
+                  </span>
+                ))}
+              </div>
+              <p className="text-muted text-xs text-center">
+                Puntos de probabilidad por recurso · diferencia {balance.spread}
+                {balance.reds > 0 && ` · ${balance.reds} par${balance.reds > 1 ? "es" : ""} de 6/8 pegados`}
+                {balance.hot > 0 && ` · ${balance.hot} esquina${balance.hot > 1 ? "s" : ""} con tres rojos`}
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2">
+            {dificultades.map(([id, d]) => (
+              <button key={id} onClick={() => rollMap(id)}
+                className={`p-2.5 rounded-xl border-2 text-left transition-all ${mapDifficulty === id ? "border-amber-500 bg-amber-500/15" : "border-slate-700 bg-slate-800/60"}`}>
+                <div className="font-bold text-amber-300 text-sm">{d.name}</div>
+                <div className="text-slate-400 text-[11px] leading-tight">{d.desc}</div>
+              </button>
+            ))}
+          </div>
+
+          <button onClick={() => rollMap()}
+            className="w-full py-3 bg-slate-700 hover:bg-slate-600 text-slate-100 font-bold rounded-xl transition-all">
+            🎲 Generar otro
+          </button>
+          <button onClick={useThisMap} disabled={!mapPreview}
+            className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 text-slate-900 font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
+            Usar este mapa
+          </button>
+          <p className="text-muted text-xs text-center">
+            Semilla <b className="text-amber-300">{mapPreview?.seed}</b> — con la misma semilla y dificultad
+            sale el mismo mapa.
+          </p>
+          {mapBoard && (
+            <button onClick={() => { setMapBoard(null); setPhase("count"); }}
+              className="w-full py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
+              Jugar sin mapa
+            </button>
+          )}
+          <button onClick={() => setPhase("count")}
+            className="w-full py-2 text-slate-400 hover:text-slate-200 text-sm font-semibold transition-all">
+            ← Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ═══════════════════════════════════════════════
   //  RENDER: SETUP - NAMES
@@ -1422,12 +1548,12 @@ export default function CatanApp() {
   // ═══════════════════════════════════════════════
   if (phase === "settlements") {
     const pData = setupData[setupIdx] || [];
-    const updateHex = (settIdx, hexIdx, field, val) => {
+    const updateHex = (settIdx, hexIdx, patch) => {
       setSetupData(prev => {
         const np = { ...prev };
         np[setupIdx] = [...(np[setupIdx] || [])];
         np[setupIdx][settIdx] = { ...np[setupIdx][settIdx], hexes: [...np[setupIdx][settIdx].hexes] };
-        np[setupIdx][settIdx].hexes[hexIdx] = { ...np[setupIdx][settIdx].hexes[hexIdx], [field]: val };
+        np[setupIdx][settIdx].hexes[hexIdx] = { ...np[setupIdx][settIdx].hexes[hexIdx], ...patch };
         return np;
       });
     };
@@ -1460,6 +1586,11 @@ export default function CatanApp() {
               <div>
                 <h2 className="text-xl font-bold text-amber-400">{setupPlayers[setupIdx]?.name}</h2>
                 <p className="text-slate-400 text-sm">Configurá los hexágonos de tus 2 poblados iniciales</p>
+                {mapBoard && (
+                  <p className="text-amber-500/80 text-xs mt-0.5">
+                    🗺️ Con el mapa cargado: elegí el número y te ofrece solo los recursos que ese número tiene.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1468,23 +1599,10 @@ export default function CatanApp() {
                 <h3 className="text-slate-300 font-semibold mb-3">🏠 Poblado {si + 1}</h3>
                 <div className="space-y-2">
                   {sett.hexes.map((hex, hi) => (
-                    <div key={hi} className="flex items-center gap-2">
-                      <select value={hex.num} aria-label={`Número del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateHex(si, hi, "num", e.target.value)}
-                        className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Nro</option>
-                        {NUMS.map(n => <option key={n} value={n}>{n} {dotStr(n)}</option>)}
-                      </select>
-                      <select value={hex.res} aria-label={`Recurso del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateHex(si, hi, "res", e.target.value)}
-                        className="flex-1 bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Recurso</option>
-                        {RES.map(r => <option key={r.id} value={r.id}>{r.e} {r.n}</option>)}
-                      </select>
-                      {sett.hexes.length > 1 && (
-                        <button onClick={() => removeHex(si, hi)} className="text-red-400 hover:text-red-300 px-2">✕</button>
-                      )}
-                    </div>
+                    <HexSelect key={hi} board={mapBoard} hex={hex}
+                      label={`del hexágono ${hi + 1} del poblado ${si + 1}`}
+                      onChange={patch => updateHex(si, hi, patch)}
+                      onRemove={sett.hexes.length > 1 ? () => removeHex(si, hi) : null} />
                   ))}
                 </div>
                 {sett.hexes.length < 3 && (
@@ -1660,22 +1778,11 @@ export default function CatanApp() {
                 <div key={si} className="mb-4 bg-slate-800/50 rounded-2xl p-3">
                   <h3 className="text-slate-300 font-semibold text-sm mb-2">🏠 Poblado {si + 1} — hexágonos adyacentes</h3>
                   {(lobbySett[si]?.hexes || []).map((hex, hi) => (
-                    <div key={hi} className="flex items-center gap-2 mb-2">
-                      <select value={hex.num} aria-label={`Número del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateLobbyHex(si, hi, "num", e.target.value)}
-                        className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Nro</option>
-                        {NUMS.map(n => <option key={n} value={n}>{n} {dotStr(n)}</option>)}
-                      </select>
-                      <select value={hex.res} aria-label={`Recurso del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateLobbyHex(si, hi, "res", e.target.value)}
-                        className="flex-1 bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Recurso</option>
-                        {RES.map(r => <option key={r.id} value={r.id}>{r.e} {r.n}</option>)}
-                      </select>
-                      {(lobbySett[si]?.hexes.length || 0) > 1 && (
-                        <button onClick={() => removeLobbyHex(si, hi)} className="text-red-400 hover:text-red-300 px-2">✕</button>
-                      )}
+                    <div key={hi} className="mb-2">
+                      <HexSelect board={game.board} hex={hex}
+                        label={`del hexágono ${hi + 1} del poblado ${si + 1}`}
+                        onChange={patch => updateLobbyHex(si, hi, patch)}
+                        onRemove={(lobbySett[si]?.hexes.length || 0) > 1 ? () => removeLobbyHex(si, hi) : null} />
                     </div>
                   ))}
                   {(lobbySett[si]?.hexes.length || 0) < 3 && (
@@ -1737,7 +1844,7 @@ export default function CatanApp() {
   // (p. ej. un resync deja el log vacío en un lobby), antes se devolvía null y
   // la pantalla quedaba en blanco sin forma de salir.
   if (phase !== "game" || !game.started) {
-    if (phase === "mode" || phase === "count" || phase === "names" || phase === "settlements") return null;
+    if (phase === "mode" || phase === "count" || phase === "map" || phase === "names" || phase === "settlements") return null;
     return (
       <div className="catan-container center-screen">
         <style>{STYLE_CSS}</style>
@@ -1764,6 +1871,7 @@ export default function CatanApp() {
     { id: "comerciar", label: "Comerciar", e: "🔄" },
     { id: "cartas", label: "Cartas", e: "🃏", hideInSimple: true },
     { id: "jugadores", label: "Jugadores", e: "👥" },
+    ...(game.board ? [{ id: "mapa", label: "Mapa", e: "🗺️" }] : []),
     { id: "stats", label: "Stats", e: "📊" },
     { id: "log", label: "Log", e: "📋" },
   ].filter(t => mode.showDevCards || !t.hideInSimple);
@@ -1893,7 +2001,7 @@ export default function CatanApp() {
         <div className="flex max-w-2xl mx-auto">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex-1 min-w-0 px-3 py-2.5 text-center text-xs font-medium transition-all whitespace-nowrap ${tab === t.id ? "text-amber-400 border-b-2 border-amber-400 bg-slate-800/50" : "text-slate-400 hover:text-slate-300"}`}>
+              className={`flex-1 shrink-0 px-3 py-2.5 text-center text-xs font-medium transition-all whitespace-nowrap ${tab === t.id ? "text-amber-400 border-b-2 border-amber-400 bg-slate-800/50" : "text-slate-400 hover:text-slate-300"}`}>
               {t.e} {t.label}
             </button>
           ))}
@@ -2429,6 +2537,16 @@ export default function CatanApp() {
             />
           )}
 
+          {tab === "mapa" && game.board && (
+            <div className="space-y-3">
+              <BoardSvg board={game.board} className="w-full rounded-2xl" />
+              <p className="text-muted text-xs text-center">
+                Mapa {DIFFICULTIES[game.board.difficulty]?.name || game.board.difficulty} · semilla{" "}
+                <b className="text-amber-300">{game.board.seed}</b>
+              </p>
+            </div>
+          )}
+
           {tab === "log" && (
             <div className="space-y-1">
               {log.length === 0 ? (
@@ -2891,23 +3009,9 @@ export default function CatanApp() {
                   </p>
                   <div className="space-y-2 mb-4">
                     {modalHexes.map((h, i) => (
-                      <div key={i} className="flex gap-2">
-                        <select value={h.num} aria-label={`Número del hexágono ${i + 1}`}
-                          onChange={e => { const nh = [...modalHexes]; nh[i] = { ...nh[i], num: e.target.value }; setModalHexes(nh); }}
-                          className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600">
-                          <option value="">Nro</option>
-                          {NUMS.map(n => <option key={n} value={n}>{n}</option>)}
-                        </select>
-                        <select value={h.res} aria-label={`Recurso del hexágono ${i + 1}`}
-                          onChange={e => { const nh = [...modalHexes]; nh[i] = { ...nh[i], res: e.target.value }; setModalHexes(nh); }}
-                          className="flex-1 bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600">
-                          <option value="">Recurso</option>
-                          {RES.map(r => <option key={r.id} value={r.id}>{r.e} {r.n}</option>)}
-                        </select>
-                        {modalHexes.length > 1 && (
-                          <button onClick={() => setModalHexes(modalHexes.filter((_, j) => j !== i))} className="text-red-400 px-2">✕</button>
-                        )}
-                      </div>
+                      <HexSelect key={i} board={game.board} hex={h} label={`del hexágono ${i + 1}`}
+                        onChange={patch => { const nh = [...modalHexes]; nh[i] = { ...nh[i], ...patch }; setModalHexes(nh); }}
+                        onRemove={modalHexes.length > 1 ? () => setModalHexes(modalHexes.filter((_, j) => j !== i)) : null} />
                     ))}
                   </div>
                   {modalHexes.length < 3 && (
