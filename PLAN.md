@@ -159,8 +159,9 @@ puedan avanzar en paralelo.
 
 1. ~~**E1** geometría + modelo + render SVG~~ — hecho (`src/board/`, tests en `scripts/test-board.mjs`).
 2. ~~**E2** generador + pantalla de previsualización + "Usar este mapa"~~ — hecho.
-3. **E1b** selección de poblados tocando el tablero (reemplaza el tipeo de `{num,res}` cuando hay
-   board, en setup individual y en el lobby online).
+3. ~~**E1b** selección de poblados tocando el tablero~~ — hecho: con mapa cargado, el setup y el
+   lobby online muestran el tablero y se toca la esquina; los selects quedan como respaldo
+   ("cargar a mano"). Cada poblado guarda su vértice, así se dibujan en el mapa y nadie repite lugar.
 4. **E3** foto → JSON → corrección → aplicar, primero para el setup inicial y después para
    reconciliar en partida.
 

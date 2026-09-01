@@ -152,3 +152,21 @@ export function resourcesForNumber(board, num) {
     .map(([res, count]) => ({ res, count }))
     .sort((a, b) => b.count - a.count || a.res.localeCompare(b.res));
 }
+
+// Hexágonos que toca un vértice, en el formato que usa el resto de la app
+// ({ num, res }). El desierto no produce nada, así que no entra.
+export function hexesForVertex(board, vertexId) {
+  const geo = geometry(board.layout);
+  const v = geo.vertexById[vertexId];
+  if (!v) return [];
+  return v.hexes
+    .map(id => board.hexes[id])
+    .filter(h => h && h.num && h.res !== "desierto")
+    .map(h => ({ num: String(h.num), res: h.res }))
+    .sort((a, b) => Number(b.num) - Number(a.num));
+}
+
+// Puerto que toca ese vértice, si hay alguno.
+export function portForVertex(board, vertexId) {
+  return board.ports.find(p => p.vertices.includes(vertexId)) || null;
+}

@@ -1,6 +1,6 @@
 // Tests de la geometría y del generador de mapas.
 // Correr con: npm run test:board
-import { geometry, LAYOUTS, layoutFor, innerVertices, isRed } from "../src/board/geometry.js";
+import { geometry, LAYOUTS, layoutFor, innerVertices, isRed, hexesForVertex, portForVertex, resourcesForNumber } from "../src/board/geometry.js";
 import { generateBoard, boardBalance, pipsByResource } from "../src/board/generate.js";
 import { numberProb } from "../src/game/constants.js";
 
@@ -80,6 +80,35 @@ for (let i = 0; i < 60; i++) {
   if (s.reds === 0 && s.hot === 0 && s.repeats === 0) extOk++;
 }
 assert(extOk === 60, `expansión equilibrada: 60/60 sin 6-8 pegados ni repetidos vecinos (dieron ${extOk})`);
+
+console.log("\nESQUINAS (cargar poblados tocando el mapa):");
+const mapa = generateBoard({ layout: "base", difficulty: "equilibrado", seed: "ESQ" });
+const geoBase = geometry("base");
+const interior = innerVertices(geoBase)[0];
+const costa = geoBase.vertices.find(v => v.hexes.length === 1);
+const hexInterior = hexesForVertex(mapa, interior.id);
+assert(hexInterior.length <= 3 && hexInterior.length >= 2,
+  `una esquina interior produce 2 o 3 hexágonos (dio ${hexInterior.length})`);
+assert(hexInterior.every(h => h.res !== "desierto" && h.num),
+  "el desierto no entra en lo que produce un poblado");
+assert(hexesForVertex(mapa, costa.id).length <= 1, "una esquina de la costa toca un hexágono");
+assert(hexesForVertex(mapa, "no-existe").length === 0, "un vértice inexistente no rompe");
+const desierto = mapa.hexes.find(h => h.res === "desierto");
+const vDesierto = geoBase.vertices.find(v => v.hexes.length === 1 && v.hexes[0] === desierto.id);
+if (vDesierto) assert(hexesForVertex(mapa, vDesierto.id).length === 0,
+  "una esquina que solo toca el desierto no produce nada");
+const conPuerto = mapa.ports[0];
+assert(portForVertex(mapa, conPuerto.vertices[0])?.type === conPuerto.type,
+  "el puerto se reconoce desde su vértice");
+assert(portForVertex(mapa, interior.id) === null, "una esquina interior no tiene puerto");
+
+console.log("\nRECURSOS POR NÚMERO:");
+const ocho = resourcesForNumber(mapa, 8);
+assert(ocho.length > 0 && ocho.every(o => o.count > 0), "el 8 devuelve los recursos que tiene");
+assert(ocho.reduce((a, o) => a + o.count, 0) === mapa.hexes.filter(h => h.num === 8).length,
+  "los recursos del 8 suman todos los hexágonos con 8");
+assert(resourcesForNumber(mapa, 7).length === 0, "el 7 no tiene hexágonos");
+assert(resourcesForNumber(mapa, "").length === 0, "sin número no hay recursos que ofrecer");
 
 console.log("\nPIPS:");
 const pips = pipsByResource(official);

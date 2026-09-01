@@ -18,6 +18,7 @@ import { useGameHistory } from "./history/useGameHistory";
 import { useWakeLock, vibrate } from "./useWakeLock";
 import BoardSvg from "./board/BoardSvg";
 import HexSelect from "./board/HexSelect";
+import SettlementPicker from "./board/SettlementPicker";
 import { layoutFor, LAYOUTS } from "./board/geometry";
 import { generateBoard, randomSeed, boardBalance, DIFFICULTIES } from "./board/generate";
 
@@ -451,6 +452,10 @@ export default function CatanApp() {
 
   // ── GENERADOR DE MAPAS ──
   const mapLayout = layoutFor(pCount, expansion).id;
+
+  // Poblados ya cargados por los demás, para dibujarlos en el mapa con su color.
+  const marksExcept = seat => game.players.flatMap((p, i) =>
+    i === seat ? [] : (p.vertices || []).map(v => ({ vertex: v, color: COLORS[p.ci]?.h || "#94a3b8" })));
 
   const rollMap = (difficulty = mapDifficulty) => {
     setMapDifficulty(difficulty);
@@ -1548,6 +1553,13 @@ export default function CatanApp() {
   // ═══════════════════════════════════════════════
   if (phase === "settlements") {
     const pData = setupData[setupIdx] || [];
+    // Poblados que ya cargaron los demás: se ven en el mapa con su color, así
+    // nadie elige dos veces la misma esquina.
+    const otherSetupMarks = Object.entries(setupData)
+      .filter(([pi]) => Number(pi) !== setupIdx)
+      .flatMap(([pi, setts]) => (setts || [])
+        .filter(st => st.vertex)
+        .map(st => ({ vertex: st.vertex, color: COLORS[setupPlayers[Number(pi)]?.ci ?? Number(pi)].h })));
     const updateHex = (settIdx, hexIdx, patch) => {
       setSetupData(prev => {
         const np = { ...prev };
@@ -1588,13 +1600,21 @@ export default function CatanApp() {
                 <p className="text-slate-400 text-sm">Configurá los hexágonos de tus 2 poblados iniciales</p>
                 {mapBoard && (
                   <p className="text-amber-500/80 text-xs mt-0.5">
-                    🗺️ Con el mapa cargado: elegí el número y te ofrece solo los recursos que ese número tiene.
+                    🗺️ Con el mapa cargado alcanza con tocar la esquina del tablero.
                   </p>
                 )}
               </div>
             </div>
 
-            {pData.map((sett, si) => (
+            {mapBoard ? (
+              <SettlementPicker
+                key={setupIdx}
+                board={mapBoard}
+                settlements={pData}
+                color={COLORS[setupPlayers[setupIdx]?.ci ?? setupIdx].h}
+                otherMarks={otherSetupMarks}
+                onChange={setts => setSetupData(prev => ({ ...prev, [setupIdx]: setts }))} />
+            ) : pData.map((sett, si) => (
               <div key={si} className="mb-6 bg-slate-800/50 rounded-2xl p-4">
                 <h3 className="text-slate-300 font-semibold mb-3">🏠 Poblado {si + 1}</h3>
                 <div className="space-y-2">
@@ -1774,7 +1794,17 @@ export default function CatanApp() {
                   );
                 })}
               </div>
-              {[0, 1].map(si => (
+              {game.board ? (
+                <div className="mb-4">
+                  <SettlementPicker
+                    key={seat}
+                    board={game.board}
+                    settlements={lobbySett}
+                    color={COLORS[players[seat]?.ci ?? seat].h}
+                    otherMarks={marksExcept(seat)}
+                    onChange={setLobbySett} />
+                </div>
+              ) : [0, 1].map(si => (
                 <div key={si} className="mb-4 bg-slate-800/50 rounded-2xl p-3">
                   <h3 className="text-slate-300 font-semibold text-sm mb-2">🏠 Poblado {si + 1} — hexágonos adyacentes</h3>
                   {(lobbySett[si]?.hexes || []).map((hex, hi) => (
@@ -2539,7 +2569,7 @@ export default function CatanApp() {
 
           {tab === "mapa" && game.board && (
             <div className="space-y-3">
-              <BoardSvg board={game.board} className="w-full rounded-2xl" />
+              <BoardSvg board={game.board} className="w-full rounded-2xl" marks={marksExcept(null)} />
               <p className="text-muted text-xs text-center">
                 Mapa {DIFFICULTIES[game.board.difficulty]?.name || game.board.difficulty} · semilla{" "}
                 <b className="text-amber-300">{game.board.seed}</b>

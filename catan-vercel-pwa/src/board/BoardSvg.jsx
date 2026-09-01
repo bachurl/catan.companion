@@ -14,7 +14,11 @@ const hexPath = (cx, cy) =>
     return `${(cx + R * Math.cos(a)).toFixed(3)},${(cy - R * Math.sin(a)).toFixed(3)}`;
   }).join(" ");
 
-export default function BoardSvg({ board, className = "", onHex }) {
+/**
+ * @param {object[]} [marks] — poblados a dibujar: { vertex, color, city }
+ * @param {(vertexId: string) => void} [onVertex] — hace tocables los vértices
+ */
+export default function BoardSvg({ board, className = "", onHex, onVertex, marks = [] }) {
   if (!board) return null;
   const geo = geometry(board.layout);
   const pad = 1.05;
@@ -62,6 +66,23 @@ export default function BoardSvg({ board, className = "", onHex }) {
         </g>
       ))}
 
+      {onVertex && geo.vertices.map(v => (
+        <circle key={v.id} cx={v.x} cy={v.y} r={0.28} fill="transparent"
+          style={{ cursor: "pointer" }} onClick={() => onVertex(v.id)}>
+          <title>Vértice</title>
+        </circle>
+      ))}
+
+      {marks.map(m => (
+        <g key={m.vertex} pointerEvents="none">
+          <circle cx={geo.vertexById[m.vertex]?.x} cy={geo.vertexById[m.vertex]?.y}
+            r={0.2} fill={m.color} stroke="#0f172a" strokeWidth="0.06" />
+          {m.city && (
+            <circle cx={geo.vertexById[m.vertex]?.x} cy={geo.vertexById[m.vertex]?.y}
+              r={0.09} fill="#0f172a" />
+          )}
+        </g>
+      ))}
     </svg>
   );
 }

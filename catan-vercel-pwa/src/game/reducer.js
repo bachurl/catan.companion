@@ -134,7 +134,10 @@ export function gameReducer(state, action) {
         prods.push(...r.prods);
         nextId = r.nextId;
       });
-      const players = state.players.map((p, i) => i !== action.player ? p : ({ ...p, productions: prods }));
+      // Si los poblados se eligieron tocando el mapa, se guarda en qué esquina
+      // quedó cada uno: alcanza para dibujarlos y para que nadie repita lugar.
+      const vertices = (action.settlements || []).map(st => st.vertex).filter(Boolean);
+      const players = state.players.map((p, i) => i !== action.player ? p : ({ ...p, productions: prods, vertices }));
       return { ...state, players, nextId };
     }
 
@@ -162,6 +165,7 @@ export function gameReducer(state, action) {
         });
         return {
           name: p.name, ci: p.ci, productions: prods, hand: eHand(),
+          vertices: (action.settlements[pi] || []).map(st => st.vertex).filter(Boolean),
           devCards: [], knightsPlayed: 0, roadsBuilt: 0,
           ports: [], devCardBought: [], devCardPlayed: false,
         };
