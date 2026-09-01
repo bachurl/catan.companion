@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import CatanApp from './CatanApp.jsx'
 import { ErrorBoundary } from './ErrorBoundary.jsx'
 import { useSWUpdate } from './useSWUpdate.js'
+import { installErrorHandlers } from './telemetry.js'
 import './index.css'
 
 function UpdateBanner() {
@@ -20,7 +21,7 @@ function UpdateBanner() {
       <button
         onClick={applyUpdate}
         style={{
-          background: 'linear-gradient(135deg,#d4a853,#b8902e)', color: '#fff', border: 'none',
+          background: 'linear-gradient(135deg,#d4a853,#b8902e)', color: '#0f172a', border: 'none',
           borderRadius: 10, padding: '8px 16px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap',
         }}>
         Actualizar
@@ -28,6 +29,10 @@ function UpdateBanner() {
     </div>
   )
 }
+
+// Errores que el ErrorBoundary no ve: fuera del árbol de React y promesas
+// rechazadas. Se registran en el dispositivo igual que los de render.
+installErrorHandlers()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

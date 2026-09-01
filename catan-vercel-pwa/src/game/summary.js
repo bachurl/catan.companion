@@ -19,9 +19,11 @@ const countBuildings = (p) => {
   return { settlements: vals.filter(c => !c).length, cities: vals.filter(c => c).length };
 };
 
-// id estable de la partida: el uid de la acción que la creó. Sobrevive a
-// recargas, resyncs y a que la misma partida se guarde desde varios celulares.
-export const gameIdOf = (actions) => actions.find(a => START_TYPES.has(a.type))?.uid || null;
+// id estable de la partida: el uid de su primera acción. Es el mismo criterio
+// que usa el archivo local (`game/history.js`), así una partida tiene un solo
+// id en el dispositivo y en la base. Sobrevive a recargas y resyncs.
+export const gameIdOf = (actions) =>
+  actions?.[0]?.uid || actions?.find(a => START_TYPES.has(a.type))?.uid || null;
 
 // Recorre el log una sola vez: estado final + tiradas con su jugador y momento.
 export function summarizeGame(rawActions) {

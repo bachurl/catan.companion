@@ -5,6 +5,7 @@ import { totalC } from "../src/game/constants.js";
 import { mergeWithLocal } from "../src/online/mergeLog.js";
 import { computeFinalScores, computeLongestRoad, computeLargestArmy } from "../src/game/selectors.js";
 import { computeMatchStats } from "../src/game/stats.js";
+import { gameId, summarize } from "../src/game/history.js";
 
 let failures = 0;
 const assert = (cond, msg) => {
@@ -484,6 +485,45 @@ console.log("computeMatchStats (estadísticas en vivo):");
   // Determinismo.
   assert(JSON.stringify(computeMatchStats(rich)) === JSON.stringify(computeMatchStats(rich)),
     "las estadísticas son determinísticas");
+}
+
+console.log("historial de partidas (summarize / gameId):");
+{
+  const mk = (n) => ({ ts, uid: `h${n}` });
+  const acts = [{
+    ...mk(0), type: "START_GAME", mode: "full",
+    players: [{ name: "Ana", ci: 0 }, { name: "Beto", ci: 3 }],
+    settlements: {
+      0: [{ hexes: [{ num: "6", res: "madera" }] }, { hexes: [{ num: "8", res: "trigo" }] }],
+      1: [{ hexes: [{ num: "5", res: "oveja" }] }, { hexes: [{ num: "9", res: "mineral" }] }],
+    },
+    deck: ["victoria"],
+  }];
+  assert(gameId(acts) === "h0", "el id de la partida es el uid de su primera acción");
+  assert(gameId([]) === null && gameId(undefined) === null, "sin acciones no hay id");
+
+  let sum = summarize(acts);
+  assert(sum.players.length === 2 && sum.players[1].ci === 3, "los jugadores guardan nombre y color");
+  assert(sum.scores[0] === 2 && sum.scores[1] === 2, "arrancan 2 a 2");
+  assert(sum.finished === false, "una partida en 2 puntos no está terminada");
+  assert(sum.gameMode === "full" && sum.expansion === false, "modo y expansión en el resumen");
+
+  // Llevar a Ana a 10 puntos con ciudades cargadas a mano.
+  const won = [...acts];
+  let n = 1;
+  for (let i = 0; i < 4; i++) {
+    won.push({ ...mk(n++), type: "ADD_FREE_SETTLEMENT", player: 0, hexes: [{ num: "4", res: "trigo" }], isCity: true });
+  }
+  sum = summarize(won);
+  assert(sum.scores[0] === 10, "2 poblados + 4 ciudades = 10 puntos");
+  assert(sum.winner === 0 && sum.winnerScore === 10, "Ana es la ganadora");
+  assert(sum.finished === true, "con 10 puntos la partida está terminada");
+  assert(gameId(won) === "h0", "agregar acciones no cambia el id (archivar es idempotente)");
+
+  // El resumen sale del log, así que un undo lo revierte.
+  sum = summarize([...won, { ...mk(99), type: "UNDO" }]);
+  // Se deshace una ciudad entera: 2 poblados + 3 ciudades = 8.
+  assert(sum.scores[0] === 8 && sum.finished === false, "el undo revierte el resumen");
 }
 
 console.log("Determinismo (replay dos veces = mismo estado):");

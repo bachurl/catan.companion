@@ -59,10 +59,27 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
   carrera de puntos por ronda, producción por jugador y recurso, detalle por jugador (dados, bloqueos del
   ladrón, comercios, robos) y distribución de tiradas vs. lo esperado. Se derivan del log de acciones, así que
   acompañan deshacer/resync y las partidas ya guardadas muestran el historial completo hacia atrás.
-- [x] **C1b** Historial de partidas ("Mis partidas"): resumen derivado del log, local + Supabase,
-  con jugadores, puntajes, duración y tiradas de cada partida anterior.
-- [ ] **C2** Error reporting (Sentry o similar) + analytics básico, meta tags/OG, dominio.
-- [ ] **C3** QA en dispositivos reales + Lighthouse.
+- [x] **C1b** Historial de partidas terminadas: cada partida ganada se archiva con su log completo
+  (últimas 20, en el dispositivo) y se puede reabrir con las mismas estadísticas que se vieron jugando.
+  Antes una partida terminada se descartaba en silencio al recargar.
+- [x] **C1c** Ese historial, además, en base de datos: el resumen de cada partida (jugadores, puntajes,
+  duración, rondas y todas las tiradas) se sube a Supabase, sin login, y las partidas jugadas desde
+  otro celular aparecen en la misma pantalla.
+- [x] **C2** Meta tags + Open Graph (imagen propia en `public/og.png`, URL absoluta resuelta en build).
+  Diagnóstico: los errores se registran en el dispositivo y se pueden copiar desde la app; con
+  `VITE_ERROR_ENDPOINT` / `VITE_ANALYTICS_ENDPOINT` además se envían, y sin ellas no se hace ninguna
+  request ni entra ningún tercero.
+- [x] **C3** Lighthouse mobile: accesibilidad 75 → **100**, best-practices 96 → **100**, SEO 91 → **100**,
+  performance **98**. Cero violaciones de axe-core (WCAG 2.1 AA) en las 13 pantallas de la app.
+
+### Pendiente de Fase C
+
+- [ ] **C2b** Dominio propio (comprarlo y apuntarlo en Vercel). Con `SITE_URL` seteada, la imagen de
+  Open Graph lo toma sola.
+- [ ] **C2c** Si se quiere recibir los errores: levantar un endpoint (o poner Sentry) y setear
+  `VITE_ERROR_ENDPOINT`. Hoy el registro es local.
+- [ ] **C3b** QA en dispositivos reales: sigue siendo lo único que no se puede automatizar desde acá
+  (iOS/Android reales, PWA instalada, pantalla que no se apaga, vibración, 2+ celulares en una sala).
 
 ## Completado
 
@@ -73,48 +90,20 @@ Decisión v1: el creador de la sala carga el setup (nombres, poblados); los dem�
 - [x] Reordenar jugadores / orden de turnos en setup y en juego (PR #6)
 - [x] Alerta de descartes al salir 7 + badge de mano >7 cartas (PR #7)
 
-## Base de datos de usuarios y partidas (sin login)
+## Configuración (estado real)
 
-Identidad: la sesión anónima de Supabase (`auth.uid()`, persistida en el navegador)
-identifica al dispositivo; el nombre visible es local y se sube a `profiles`. No hay
-contraseña ni email. Si en algún momento se agrega login, se linkea el mismo uid y
-los datos ya guardados siguen siendo válidos.
+Supabase está en producción desde las partidas del 30/8: las salas online, el sync entre celulares y
+la cola offline funcionan, y los logs de partidas quedan en la tabla de acciones. El desfase de
+sincronización que apareció jugando se corrigió en el PR #35 (issue #24).
 
-**Fase 1 — hecha** (`supabase/history.sql`, `src/game/summary.js`, `src/history/`)
+- [x] Proyecto Supabase creado, `supabase/schema.sql` corrido, anonymous sign-ins habilitado
+- [x] `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` seteadas en Vercel
+- [ ] `supabase/history.sql` corrido en el SQL Editor — sin eso el historial anda igual, pero solo
+      local en cada dispositivo (no se guarda en la base ni se ve desde otro celular)
+- [x] Proyecto Vercel duplicado (`bachurl-catan.companion`) borrado — fallaba en cada deploy porque
+      apuntaba a la raíz del repo, donde no hay `package.json`, y mandaba un mail de error por push
+- [ ] `ANTHROPIC_API_KEY` en Vercel — sin ella el consultor de reglas (❓ Reglas) se reporta no
+      disponible y el resto de la app anda igual
+- [ ] QA con 2 dispositivos reales (crear sala / unirse / sync / cola offline / undo remoto)
 
-- `profiles(user_id, display_name, last_seen_at)`
-- `games(id, owner_id, room_code, mode, expansion, player_count, status, started_at,
-  ended_at, duration_seconds, turns, roll_count, dice_totals, winner_index, winner_name)`
-- `game_players(game_id, player_index, name, color_index, user_id, vp, settlements,
-  cities, roads_built, knights, dev_cards, longest_road, largest_army)`
-- `game_rolls(game_id, seq, d1, d2, total, player_index, manual, rolled_at)`
-- `game_participants(game_id, user_id)` — qué dispositivos jugaron cada partida
-- El `id` de la partida es el uid de su acción de creación: guardar dos veces es
-  idempotente. Escribe el dueño (host o el propio celular); los demás se registran
-  como participantes.
-- RLS: cada dispositivo lee solo las partidas propias o donde participó.
-
-**Fase 2 — próximos pasos**
-
-1. **Cola offline del historial**: hoy si falla el push queda solo el local; agregar
-   reintento (igual que `catan.onlinePending.v1` del log online).
-2. **Jugadores recurrentes**: tabla `people(id, owner_id, name)` + `game_players.person_id`
-   para que "Beto" sea el mismo entre partidas y se puedan calcular records
-   (winrate, PV promedio, suerte con los dados).
-3. **Pantalla de estadísticas**: acumulado por persona y por número (¿el 8 sale menos
-   de lo que debería?), sobre `game_rolls`.
-4. **Fin de partida**: guardar `ended_at` real al detectar ganador (hoy es el ts de la
-   última acción) y mostrar el resumen post-partida.
-5. **Retención/limpieza**: borrar partidas en estado `lobby` sin actividad y ofrecer
-   exportar a JSON/CSV.
-6. **Login opcional (más adelante)**: magic link de Supabase; al linkear, `update` de
-   `owner_id`/`user_id` del uid anónimo al definitivo.
-
-## Pendiente de acción manual (bloqueante para online)
-
-1. Crear proyecto Supabase (gratis) — pasos en `catan-vercel-pwa/.env.example`
-2. Correr `catan-vercel-pwa/supabase/schema.sql` y `catan-vercel-pwa/supabase/history.sql`
-   en el SQL Editor
-3. Habilitar Anonymous sign-ins (Authentication → Providers)
-4. Setear `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` en Vercel
-5. QA con 2 dispositivos reales (crear sala / unirse / sync / cola offline / undo remoto)
+Todas las variables están documentadas en `catan-vercel-pwa/.env.example`.

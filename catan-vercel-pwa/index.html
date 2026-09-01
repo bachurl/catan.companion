@@ -2,8 +2,32 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <title>Catán Companion</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Catán Companion — llevá el puntaje de tus partidas</title>
+    <meta name="description" content="Companion app para Catán: puntajes, recursos y cartas de desarrollo desde el celular de cada jugador. Funciona sin internet y sincroniza la partida entre todos." />
+
+    <!-- Open Graph / Twitter: cómo se ve el link al compartirlo por WhatsApp, etc.
+         og:image es absoluta a propósito: las URLs relativas no las resuelven
+         todos los scrapers. %SITE_URL% lo resuelve el build (ver vite.config.js). -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Catán Companion" />
+    <meta property="og:title" content="Catán Companion" />
+    <meta property="og:description" content="Puntajes, recursos y cartas de desarrollo desde el celular de cada jugador. Funciona sin internet y sincroniza la partida entre todos." />
+    <meta property="og:image" content="%SITE_URL%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Catán Companion — llevá el puntaje, jugá en la mesa" />
+    <meta property="og:locale" content="es_AR" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Catán Companion" />
+    <meta name="twitter:description" content="Puntajes, recursos y cartas de desarrollo desde el celular de cada jugador. Funciona sin internet." />
+    <meta name="twitter:image" content="%SITE_URL%/og.png" />
+
+    <!-- Las fuentes vienen de un tercero y bloquean el render: el preconnect
+         adelanta el handshake. crossorigin en gstatic porque los archivos de
+         fuente se piden en modo CORS. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json" />
@@ -17,9 +41,12 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏝️</text></svg>" />
 
-    <!-- Prevent zoom on inputs (mobile) -->
     <style>
       body { margin: 0; padding: 0; overflow-x: hidden; }
+      /* 16px es el mínimo que evita que iOS haga zoom al enfocar un input.
+         Es la razón por la que el viewport no necesita user-scalable=no
+         (que además impide hacer zoom a mano, y eso es un problema de
+         accesibilidad). */
       input, select, textarea { font-size: 16px !important; }
     </style>
   </head>

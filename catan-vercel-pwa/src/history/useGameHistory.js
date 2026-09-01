@@ -1,77 +1,66 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { summarizeGame } from "../game/summary.js";
-import { loadLocalHistory, upsertLocalGame, removeLocalGame } from "./localHistory.js";
 import { pushGame, fetchGames, fetchRolls, syncProfile, loadProfileName, saveProfileName } from "./gamesRepo.js";
 import { isOnlineConfigured } from "../online/supabaseClient.js";
 
 // ═══════════════════════════════════════════════
-//  HISTORIAL DE PARTIDAS
+//  HISTORIAL EN LA NUBE
 //
-//  Local siempre (funciona sin Supabase y sin conexión) y, si hay Supabase,
-//  además en la nube. El resumen se recalcula del log con summarizeGame, así
-//  que guardar es idempotente: la misma partida se reescribe, no se duplica.
+//  El archivo local de partidas es `game/history.js` (guarda el log completo
+//  y lo reabre con el StatsPanel). Esto es la capa de arriba: sube el resumen
+//  de cada partida a Supabase para tenerlas en la base y verlas desde otro
+//  dispositivo. Sin Supabase configurado no hace nada y la app sigue igual.
+//
+//  El resumen se deriva del log con summarizeGame y el id de la partida es el
+//  uid de su primera acción (el mismo que usa el archivo local), así que subir
+//  dos veces la misma partida reescribe sus filas en vez de duplicarlas.
 // ═══════════════════════════════════════════════
 export function useGameHistory() {
-  const [games, setGames] = useState(() => loadLocalHistory());
-  const [profileName, setProfileNameState] = useState(() => loadProfileName());
+  const [games, setGames] = useState([]);       // partidas en la nube
   const [loading, setLoading] = useState(false);
-  const lastSavedRef = useRef({}); // id → cantidad de acciones ya guardadas
+  const [profileName, setProfileNameState] = useState(() => loadProfileName());
+  const lastSavedRef = useRef({}); // id → cantidad de acciones ya subidas
 
   const setProfileName = useCallback((name) => {
     setProfileNameState(name);
     saveProfileName(name);
-    if (isOnlineConfigured) syncProfile(name).catch(() => { /* se reintenta al guardar una partida */ });
+    if (isOnlineConfigured) syncProfile(name).catch(() => { /* se reintenta al subir una partida */ });
   }, []);
 
-  // Guarda el resumen de una partida. `force` ignora el corte por cantidad de
-  // acciones (se usa al terminar, para que el resultado final quede sí o sí).
+  // Sube el resumen. `force` ignora el corte por cantidad de acciones (se usa
+  // al terminar, para que el resultado final quede sí o sí).
   const saveGame = useCallback(async (actions, { roomCode = null, seatOwners = {}, force = false } = {}) => {
+    if (!isOnlineConfigured) return null;
     const summary = summarizeGame(actions);
     if (!summary) return null;
-    // Autosave: no reescribir en cada acción, solo cada 10 (o al forzar).
     const prev = lastSavedRef.current[summary.id] || 0;
     if (!force && actions.length - prev < 10) return summary;
     lastSavedRef.current[summary.id] = actions.length;
-
-    setGames(upsertLocalGame({ ...summary, roomCode }));
-    if (isOnlineConfigured) {
-      try { await pushGame(summary, { roomCode, seatOwners }); } catch { /* queda el local */ }
-    }
+    try { await pushGame(summary, { roomCode, seatOwners }); } catch { /* queda el archivo local */ }
     return summary;
   }, []);
 
-  // Lista combinada: lo remoto manda (tiene los datos de todos los celulares)
-  // y lo local completa las partidas que nunca llegaron a subirse.
   const refresh = useCallback(async () => {
-    const local = loadLocalHistory();
-    if (!isOnlineConfigured) { setGames(local); return local; }
+    if (!isOnlineConfigured) return [];
     setLoading(true);
-    let merged = local;
-    try {
-      const remote = await fetchGames();
-      const byId = new Map(local.map(g => [g.id, g]));
-      remote.forEach(g => byId.set(g.id, { ...byId.get(g.id), ...g }));
-      merged = [...byId.values()].sort((a, b) => (b.endedAt || b.startedAt || 0) - (a.endedAt || a.startedAt || 0));
-      setGames(merged);
-    } catch { setGames(local); }
+    let list = [];
+    try { list = await fetchGames(); setGames(list); } catch { /* sin red: solo local */ }
     setLoading(false);
-    return merged;
+    return list;
   }, []);
 
-  const deleteGame = useCallback((id) => setGames(removeLocalGame(id)), []);
-
-  // Las tiradas de una partida vieja pueden estar solo en la nube.
+  // Las tiradas de una partida vieja se piden solo al abrir el detalle.
   const getRolls = useCallback(async (game) => {
     if (game?.rolls?.length) return game.rolls;
     if (!isOnlineConfigured || !game?.id) return [];
     try { return await fetchRolls(game.id); } catch { return []; }
   }, []);
 
+  // Registra el perfil guardado del dispositivo (solo al montar).
   useEffect(() => {
     if (isOnlineConfigured && profileName) syncProfile(profileName).catch(() => { /* mejor esfuerzo */ });
-    // Solo al montar: registra el perfil guardado del dispositivo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { games, loading, profileName, setProfileName, saveGame, refresh, deleteGame, getRolls };
+  return { isConfigured: isOnlineConfigured, games, loading, profileName, setProfileName, saveGame, refresh, getRolls };
 }

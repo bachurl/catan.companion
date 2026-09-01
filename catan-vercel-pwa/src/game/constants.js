@@ -4,8 +4,8 @@
 export const RES = [
   { id: "madera", n: "Madera", e: "🌲", bg: "bg-green-700", tx: "text-green-100" },
   { id: "ladrillo", n: "Ladrillo", e: "🧱", bg: "bg-red-700", tx: "text-red-100" },
-  { id: "trigo", n: "Trigo", e: "🌾", bg: "bg-yellow-600", tx: "text-yellow-100" },
-  { id: "oveja", n: "Oveja", e: "🐑", bg: "bg-lime-600", tx: "text-lime-100" },
+  { id: "trigo", n: "Trigo", e: "🌾", bg: "bg-yellow-700", tx: "text-yellow-100" },
+  { id: "oveja", n: "Oveja", e: "🐑", bg: "bg-lime-700", tx: "text-lime-100" },
   { id: "mineral", n: "Mineral", e: "⛰️", bg: "bg-stone-600", tx: "text-stone-100" },
 ];
 export const RM = Object.fromEntries(RES.map(r => [r.id, r]));
