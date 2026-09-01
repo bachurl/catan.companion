@@ -75,11 +75,11 @@ assert(caos > 0, "caótico: busca activamente lo desparejo");
 assert(sumCaos / 25 > sumEq / 25, `caótico desbalancea más los recursos (${(sumCaos/25).toFixed(1)} vs ${(sumEq/25).toFixed(1)})`);
 
 let extOk = 0;
-for (let i = 0; i < 15; i++) {
+for (let i = 0; i < 60; i++) {
   const s = boardBalance(generateBoard({ layout: "ext", difficulty: "equilibrado" }));
-  if (s.reds === 0 && s.hot === 0) extOk++;
+  if (s.reds === 0 && s.hot === 0 && s.repeats === 0) extOk++;
 }
-assert(extOk === 15, `expansión equilibrada: 15/15 sin 6-8 pegados (dieron ${extOk})`);
+assert(extOk === 60, `expansión equilibrada: 60/60 sin 6-8 pegados ni repetidos vecinos (dieron ${extOk})`);
 
 console.log("\nPIPS:");
 const pips = pipsByResource(official);

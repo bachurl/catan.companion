@@ -4,7 +4,7 @@ import { DiceFace, ResBadge } from "./components";
 import StatsPanel, { DiceStats } from "./StatsPanel";
 import {
   RES, RM, NUMS, COSTS, COST_NAMES, COST_EMOJI, INIT_DECK, DC, COLORS,
-  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand, dotStr,
+  playerMark, GAME_MODES, shuffle, rollDie, afford, totalC, eHand,
 } from "./game/constants";
 import { computeGains, replayActions, effectiveActions, robberNum, robberRes, robberLabel } from "./game/reducer";
 import { computeScores, computeFinalScores, computeLargestArmy, computeLongestRoad, WINNING_SCORE, isGameFinished } from "./game/selectors";
@@ -17,6 +17,7 @@ import { useOnlineRoom, loadSavedRoomCode } from "./online/useOnlineRoom";
 import { useGameHistory } from "./history/useGameHistory";
 import { useWakeLock, vibrate } from "./useWakeLock";
 import BoardSvg from "./board/BoardSvg";
+import HexSelect from "./board/HexSelect";
 import { layoutFor, LAYOUTS } from "./board/geometry";
 import { generateBoard, randomSeed, boardBalance, DIFFICULTIES } from "./board/generate";
 
@@ -839,9 +840,9 @@ export default function CatanApp() {
     showNotif("💾 Poblados guardados");
   };
 
-  const updateLobbyHex = (si, hi, field, val) => setLobbySett(prev => {
+  const updateLobbyHex = (si, hi, patch) => setLobbySett(prev => {
     const np = prev.map(s => ({ hexes: s.hexes.map(h => ({ ...h })) }));
-    np[si].hexes[hi][field] = val;
+    np[si].hexes[hi] = { ...np[si].hexes[hi], ...patch };
     return np;
   });
   const addLobbyHex = (si) => setLobbySett(prev => {
@@ -1515,12 +1516,12 @@ export default function CatanApp() {
   // ═══════════════════════════════════════════════
   if (phase === "settlements") {
     const pData = setupData[setupIdx] || [];
-    const updateHex = (settIdx, hexIdx, field, val) => {
+    const updateHex = (settIdx, hexIdx, patch) => {
       setSetupData(prev => {
         const np = { ...prev };
         np[setupIdx] = [...(np[setupIdx] || [])];
         np[setupIdx][settIdx] = { ...np[setupIdx][settIdx], hexes: [...np[setupIdx][settIdx].hexes] };
-        np[setupIdx][settIdx].hexes[hexIdx] = { ...np[setupIdx][settIdx].hexes[hexIdx], [field]: val };
+        np[setupIdx][settIdx].hexes[hexIdx] = { ...np[setupIdx][settIdx].hexes[hexIdx], ...patch };
         return np;
       });
     };
@@ -1553,6 +1554,11 @@ export default function CatanApp() {
               <div>
                 <h2 className="text-xl font-bold text-amber-400">{setupPlayers[setupIdx]?.name}</h2>
                 <p className="text-slate-400 text-sm">Configurá los hexágonos de tus 2 poblados iniciales</p>
+                {mapBoard && (
+                  <p className="text-amber-500/80 text-xs mt-0.5">
+                    🗺️ Con el mapa cargado: elegí el número y te ofrece solo los recursos que ese número tiene.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1561,23 +1567,10 @@ export default function CatanApp() {
                 <h3 className="text-slate-300 font-semibold mb-3">🏠 Poblado {si + 1}</h3>
                 <div className="space-y-2">
                   {sett.hexes.map((hex, hi) => (
-                    <div key={hi} className="flex items-center gap-2">
-                      <select value={hex.num} aria-label={`Número del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateHex(si, hi, "num", e.target.value)}
-                        className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Nro</option>
-                        {NUMS.map(n => <option key={n} value={n}>{n} {dotStr(n)}</option>)}
-                      </select>
-                      <select value={hex.res} aria-label={`Recurso del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateHex(si, hi, "res", e.target.value)}
-                        className="flex-1 bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Recurso</option>
-                        {RES.map(r => <option key={r.id} value={r.id}>{r.e} {r.n}</option>)}
-                      </select>
-                      {sett.hexes.length > 1 && (
-                        <button onClick={() => removeHex(si, hi)} className="text-red-400 hover:text-red-300 px-2">✕</button>
-                      )}
-                    </div>
+                    <HexSelect key={hi} board={mapBoard} hex={hex}
+                      label={`del hexágono ${hi + 1} del poblado ${si + 1}`}
+                      onChange={patch => updateHex(si, hi, patch)}
+                      onRemove={sett.hexes.length > 1 ? () => removeHex(si, hi) : null} />
                   ))}
                 </div>
                 {sett.hexes.length < 3 && (
@@ -1753,22 +1746,11 @@ export default function CatanApp() {
                 <div key={si} className="mb-4 bg-slate-800/50 rounded-2xl p-3">
                   <h3 className="text-slate-300 font-semibold text-sm mb-2">🏠 Poblado {si + 1} — hexágonos adyacentes</h3>
                   {(lobbySett[si]?.hexes || []).map((hex, hi) => (
-                    <div key={hi} className="flex items-center gap-2 mb-2">
-                      <select value={hex.num} aria-label={`Número del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateLobbyHex(si, hi, "num", e.target.value)}
-                        className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Nro</option>
-                        {NUMS.map(n => <option key={n} value={n}>{n} {dotStr(n)}</option>)}
-                      </select>
-                      <select value={hex.res} aria-label={`Recurso del hexágono ${hi + 1} del poblado ${si + 1}`}
-                        onChange={e => updateLobbyHex(si, hi, "res", e.target.value)}
-                        className="flex-1 bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600 focus:border-amber-500 focus:outline-none">
-                        <option value="">Recurso</option>
-                        {RES.map(r => <option key={r.id} value={r.id}>{r.e} {r.n}</option>)}
-                      </select>
-                      {(lobbySett[si]?.hexes.length || 0) > 1 && (
-                        <button onClick={() => removeLobbyHex(si, hi)} className="text-red-400 hover:text-red-300 px-2">✕</button>
-                      )}
+                    <div key={hi} className="mb-2">
+                      <HexSelect board={game.board} hex={hex}
+                        label={`del hexágono ${hi + 1} del poblado ${si + 1}`}
+                        onChange={patch => updateLobbyHex(si, hi, patch)}
+                        onRemove={(lobbySett[si]?.hexes.length || 0) > 1 ? () => removeLobbyHex(si, hi) : null} />
                     </div>
                   ))}
                   {(lobbySett[si]?.hexes.length || 0) < 3 && (
@@ -2968,23 +2950,9 @@ export default function CatanApp() {
                   </p>
                   <div className="space-y-2 mb-4">
                     {modalHexes.map((h, i) => (
-                      <div key={i} className="flex gap-2">
-                        <select value={h.num} aria-label={`Número del hexágono ${i + 1}`}
-                          onChange={e => { const nh = [...modalHexes]; nh[i] = { ...nh[i], num: e.target.value }; setModalHexes(nh); }}
-                          className="bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600">
-                          <option value="">Nro</option>
-                          {NUMS.map(n => <option key={n} value={n}>{n}</option>)}
-                        </select>
-                        <select value={h.res} aria-label={`Recurso del hexágono ${i + 1}`}
-                          onChange={e => { const nh = [...modalHexes]; nh[i] = { ...nh[i], res: e.target.value }; setModalHexes(nh); }}
-                          className="flex-1 bg-slate-700 text-white rounded-lg px-3 py-2 text-sm border border-slate-600">
-                          <option value="">Recurso</option>
-                          {RES.map(r => <option key={r.id} value={r.id}>{r.e} {r.n}</option>)}
-                        </select>
-                        {modalHexes.length > 1 && (
-                          <button onClick={() => setModalHexes(modalHexes.filter((_, j) => j !== i))} className="text-red-400 px-2">✕</button>
-                        )}
-                      </div>
+                      <HexSelect key={i} board={game.board} hex={h} label={`del hexágono ${i + 1}`}
+                        onChange={patch => { const nh = [...modalHexes]; nh[i] = { ...nh[i], ...patch }; setModalHexes(nh); }}
+                        onRemove={modalHexes.length > 1 ? () => setModalHexes(modalHexes.filter((_, j) => j !== i)) : null} />
                     ))}
                   </div>
                   {modalHexes.length < 3 && (

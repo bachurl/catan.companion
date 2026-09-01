@@ -133,3 +133,22 @@ export function geometry(layoutId) {
 export const innerVertices = geo => geo.vertices.filter(v => v.hexes.length === 3);
 
 export const isRed = n => n === 6 || n === 8;
+
+// ── Consultas sobre un mapa generado ──
+// Sirven para que, al cargar los poblados, la app ofrezca solo lo que el
+// tablero realmente tiene: si el 8 es madera y mineral, esos dos y nada más.
+
+export const boardNumbers = board =>
+  [...new Set(board.hexes.map(h => h.num).filter(Boolean))].sort((a, b) => a - b);
+
+// Recursos que tienen ese número en el tablero, con cuántos hexágonos hay de
+// cada uno, del más repetido al menos.
+export function resourcesForNumber(board, num) {
+  const n = Number(num);
+  if (!board || !n) return [];
+  const counts = {};
+  board.hexes.forEach(h => { if (h.num === n) counts[h.res] = (counts[h.res] || 0) + 1; });
+  return Object.entries(counts)
+    .map(([res, count]) => ({ res, count }))
+    .sort((a, b) => b.count - a.count || a.res.localeCompare(b.res));
+}

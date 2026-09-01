@@ -222,14 +222,20 @@ export function generateBoard({ layout = "base", difficulty = "equilibrado", see
   // Equilibrado: en vez de generar al azar y descartar (con 28 fichas casi
   // nunca sale de casualidad), coloca las fichas una por una eligiendo solo
   // entre las que no rompen ninguna regla, y reintenta si se traba.
+  let bestPlaced = null, bestSpread = Infinity;
   for (let attempt = 0; attempt < 200; attempt++) {
     const base = build();
     const placed = placeBalanced(geo, base.hexes, def.numbers, rnd);
     if (!placed) continue;
     const candidate = { ...base, hexes: placed };
-    if (pipSpread(candidate) <= 4) return candidate;
+    const spread = pipSpread(candidate);
+    if (spread <= 4) return candidate;
+    // Los recursos quedaron desparejos, pero las fichas no rompen ninguna regla:
+    // vale más guardarlo que volver al azar puro.
+    if (spread < bestSpread) { bestPlaced = candidate; bestSpread = spread; }
   }
-  // Sin suerte (no debería pasar): devuelve lo más parejo que se pueda armar.
+  if (bestPlaced) return bestPlaced;
+  // Ni una colocación válida (no debería pasar): lo más parejo que salga al azar.
   let best = null, bestScore = Infinity;
   for (let i = 0; i < 200; i++) {
     const b = build(), s = chaosScore(b);
