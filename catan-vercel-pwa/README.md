@@ -67,6 +67,12 @@ y cargarla en Vercel como `ANTHROPIC_API_KEY` (marcada como *Sensitive*: nunca l
 navegador). Sin la variable, el botón explica cómo configurarlo y no gasta nada.
 `CATAN_RULES_MODEL` permite cambiar el modelo (por defecto `claude-opus-5`).
 
+La misma key habilita **cargar el tablero sacándole una foto** ([api/vision.js](api/vision.js)):
+la foto se achica en el celular, se manda al endpoint y vuelve qué recurso y qué número tiene
+cada hexágono. Es un borrador: la app lo muestra sobre el mapa, marca los hexágonos que leyó con
+dudas y no deja usarlo hasta que el tablero cierre con las piezas de la caja. La imagen no se
+guarda en ningún lado. `CATAN_VISION_MODEL` cambia el modelo.
+
 ## Estadísticas e historial
 
 El tab **📊 Stats** está disponible en cualquier momento de la partida, no solo al final:

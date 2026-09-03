@@ -133,7 +133,7 @@ puedan avanzar en paralelo.
 - **Pendiente del generador**: compartir el mapa por link con la semilla e imprimirlo/guardarlo como
   imagen para armar el tablero físico.
 
-### E3 — Cargar el tablero desde una foto
+### E3 — Cargar el tablero desde una foto — ✅ hecho (setup inicial)
 
 - **Flujo**: sacar la foto (`<input capture>`) → subir → la app propone un tablero completo →
   el usuario corrige lo que salió mal sobre la imagen → confirmar.
@@ -162,8 +162,9 @@ puedan avanzar en paralelo.
 3. ~~**E1b** selección de poblados tocando el tablero~~ — hecho: con mapa cargado, el setup y el
    lobby online muestran el tablero y se toca la esquina; los selects quedan como respaldo
    ("cargar a mano"). Cada poblado guarda su vértice, así se dibujan en el mapa y nadie repite lugar.
-4. **E3** foto → JSON → corrección → aplicar, primero para el setup inicial y después para
-   reconciliar en partida.
+4. ~~**E3** foto → JSON → corrección → aplicar para el setup inicial~~ — hecho
+   (`api/vision.js` + `src/board/photo.js` + `PhotoBoard.jsx`). Falta el segundo uso:
+   sacar una foto **durante** la partida para reconciliar construcciones no cargadas.
 
 Riesgo principal: E3 depende de la calidad del reconocimiento con fotos reales (ángulo, luz,
 sombras). Mitigación: E1/E2 no dependen de eso, y E3 siempre pasa por la pantalla de corrección,

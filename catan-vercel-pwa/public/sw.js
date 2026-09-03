@@ -39,6 +39,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
+  // Las funciones del servidor (/api/*) nunca se cachean: un "no está
+  // configurado" viejo se quedaría pegado después de configurar la API key, y
+  // el service worker terminaría respondiendo el index.html en su lugar.
+  if (url.pathname.startsWith('/api/')) return;
+
   // HTML/navegación: network-first, así un deploy nuevo carga apenas hay red.
   if (req.mode === 'navigate' || url.pathname === '/index.html') {
     event.respondWith(
