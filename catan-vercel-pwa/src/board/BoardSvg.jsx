@@ -18,9 +18,10 @@ const hexPath = (cx, cy) =>
  * @param {object[]} [marks] — poblados a dibujar: { vertex, color, city }
  * @param {(vertexId: string) => void} [onVertex] — hace tocables los vértices
  */
-export default function BoardSvg({ board, className = "", onHex, onVertex, marks = [] }) {
+export default function BoardSvg({ board, className = "", onHex, onVertex, marks = [], highlight = [] }) {
   if (!board) return null;
   const geo = geometry(board.layout);
+  const marcados = new Set(highlight);
   const pad = 1.05;
   const w = geo.width + pad * 2, h = geo.height + pad * 2;
 
@@ -36,7 +37,9 @@ export default function BoardSvg({ board, className = "", onHex, onVertex, marks
           <g key={hx.id} onClick={onHex ? () => onHex(hx) : undefined}
             style={onHex ? { cursor: "pointer" } : undefined}>
             <polygon points={hexPath(g.cx, g.cy)} fill={FILL[hx.res] || "#334155"}
-              stroke="#0f172a" strokeWidth="0.04" />
+              stroke={marcados.has(hx.id) ? "#fbbf24" : "#0f172a"}
+              strokeWidth={marcados.has(hx.id) ? "0.09" : "0.04"}
+              strokeDasharray={marcados.has(hx.id) ? "0.12 0.08" : undefined} />
             {hx.num && (
               <>
                 <circle cx={g.cx} cy={g.cy} r={0.36} fill="#fef3c7" />

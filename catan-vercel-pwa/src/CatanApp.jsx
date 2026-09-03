@@ -19,6 +19,8 @@ import { useWakeLock, vibrate } from "./useWakeLock";
 import BoardSvg from "./board/BoardSvg";
 import HexSelect from "./board/HexSelect";
 import SettlementPicker from "./board/SettlementPicker";
+import PhotoBoard from "./board/PhotoBoard";
+import { visionAvailable } from "./board/photo.js";
 import { layoutFor, LAYOUTS } from "./board/geometry";
 import { generateBoard, randomSeed, boardBalance, DIFFICULTIES } from "./board/generate";
 
@@ -209,6 +211,9 @@ export default function CatanApp() {
   const [mapBoard, setMapBoard] = useState(null);
   const [mapPreview, setMapPreview] = useState(null);
   const [mapDifficulty, setMapDifficulty] = useState("equilibrado");
+  // El reconocimiento por foto necesita ANTHROPIC_API_KEY en el servidor: si no
+  // está, la opción no se ofrece en vez de fallar al tocarla.
+  const [photoOk, setPhotoOk] = useState(false);
   const [tab, setTab] = useState("dados");
   const [rolling, setRolling] = useState(false);
   const [manualPickerOpen, setManualPickerOpen] = useState(() => loadPrefManual());
@@ -450,6 +455,12 @@ export default function CatanApp() {
     setPhase("names");
   };
 
+  useEffect(() => {
+    let vivo = true;
+    visionAvailable().then(ok => { if (vivo) setPhotoOk(ok); });
+    return () => { vivo = false; };
+  }, []);
+
   // ── GENERADOR DE MAPAS ──
   const mapLayout = layoutFor(pCount, expansion).id;
 
@@ -467,6 +478,13 @@ export default function CatanApp() {
       ? mapBoard
       : generateBoard({ layout: mapLayout, difficulty: mapDifficulty, seed: randomSeed() }));
     setPhase("map");
+  };
+
+  const usePhotoBoard = (board) => {
+    setMapBoard(board);
+    setMapPreview(board);
+    setPhase("count");
+    showNotif("📷 Tablero cargado desde la foto");
   };
 
   const useThisMap = () => {
@@ -1363,7 +1381,7 @@ export default function CatanApp() {
               <div className="text-slate-400 text-xs">
                 {mapBoard
                   ? "Tocá para ver el tablero o generar otro."
-                  : `Tablero ${LAYOUTS[mapLayout].name} al azar, con el grado de dificultad que quieras.`}
+                  : `Tablero ${LAYOUTS[mapLayout].name} al azar${photoOk ? ", o cargá el de la mesa con una foto." : ", con el grado de dificultad que quieras."}`}
               </div>
             </div>
           </div>
@@ -1397,6 +1415,16 @@ export default function CatanApp() {
       </div>
       </div>
     </div>
+  );
+
+  // ═══════════════════════════════════════════════
+  //  RENDER: TABLERO POR FOTO
+  // ═══════════════════════════════════════════════
+  if (phase === "photo") return (
+    <>
+      <style>{STYLE_CSS}</style>
+      <PhotoBoard layout={mapLayout} onUse={usePhotoBoard} onCancel={() => setPhase("map")} />
+    </>
   );
 
   // ═══════════════════════════════════════════════
@@ -1450,6 +1478,12 @@ export default function CatanApp() {
             className="w-full py-3 bg-slate-700 hover:bg-slate-600 text-slate-100 font-bold rounded-xl transition-all">
             🎲 Generar otro
           </button>
+          {photoOk && (
+            <button onClick={() => setPhase("photo")}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl border border-slate-600 transition-all">
+              📷 Cargar el tablero de una foto
+            </button>
+          )}
           <button onClick={useThisMap} disabled={!mapPreview}
             className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 text-slate-900 font-bold rounded-xl text-lg transition-all shadow-lg shadow-amber-500/20">
             Usar este mapa
@@ -1874,7 +1908,7 @@ export default function CatanApp() {
   // (p. ej. un resync deja el log vacío en un lobby), antes se devolvía null y
   // la pantalla quedaba en blanco sin forma de salir.
   if (phase !== "game" || !game.started) {
-    if (phase === "mode" || phase === "count" || phase === "map" || phase === "names" || phase === "settlements") return null;
+    if (phase === "mode" || phase === "count" || phase === "map" || phase === "photo" || phase === "names" || phase === "settlements") return null;
     return (
       <div className="catan-container center-screen">
         <style>{STYLE_CSS}</style>
