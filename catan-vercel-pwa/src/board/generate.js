@@ -160,7 +160,7 @@ function layTiles(geo, terrains, numbers) {
 // tapada por el hexágono.
 const PORT_OFFSET = 0.38;
 
-function layPorts(geo, types) {
+export function layPorts(geo, types) {
   const border = geo.border;
   const step = border.length / types.length;
   return types.map((type, i) => {
@@ -175,6 +175,11 @@ function layPorts(geo, types) {
     };
   });
 }
+
+// Puertos en las posiciones de siempre y en el orden del reglamento. La foto no
+// los reconoce (el marco del tablero físico es fijo), así que un tablero cargado
+// por foto arranca con estos y se corrigen a mano si hace falta.
+export const defaultPorts = layout => layPorts(geometry(layout), LAYOUTS[layout].ports);
 
 /**
  * Genera un tablero.

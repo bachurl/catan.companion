@@ -133,7 +133,7 @@ puedan avanzar en paralelo.
 - **Pendiente del generador**: compartir el mapa por link con la semilla e imprimirlo/guardarlo como
   imagen para armar el tablero físico.
 
-### E3 — Cargar el tablero desde una foto
+### E3 — Cargar el tablero desde una foto — ✅ hecho (setup inicial)
 
 - **Flujo**: sacar la foto (`<input capture>`) → subir → la app propone un tablero completo →
   el usuario corrige lo que salió mal sobre la imagen → confirmar.
@@ -162,8 +162,9 @@ puedan avanzar en paralelo.
 3. ~~**E1b** selección de poblados tocando el tablero~~ — hecho: con mapa cargado, el setup y el
    lobby online muestran el tablero y se toca la esquina; los selects quedan como respaldo
    ("cargar a mano"). Cada poblado guarda su vértice, así se dibujan en el mapa y nadie repite lugar.
-4. **E3** foto → JSON → corrección → aplicar, primero para el setup inicial y después para
-   reconciliar en partida.
+4. ~~**E3** foto → JSON → corrección → aplicar para el setup inicial~~ — hecho
+   (`api/vision.js` + `src/board/photo.js` + `PhotoBoard.jsx`). Falta el segundo uso:
+   sacar una foto **durante** la partida para reconciliar construcciones no cargadas.
 
 Riesgo principal: E3 depende de la calidad del reconocimiento con fotos reales (ángulo, luz,
 sombras). Mitigación: E1/E2 no dependen de eso, y E3 siempre pasa por la pantalla de corrección,
@@ -190,8 +191,9 @@ sincronización que apareció jugando se corrigió en el PR #35 (issue #24).
       local en cada dispositivo (no se guarda en la base ni se ve desde otro celular)
 - [x] Proyecto Vercel duplicado (`bachurl-catan.companion`) borrado — fallaba en cada deploy porque
       apuntaba a la raíz del repo, donde no hay `package.json`, y mandaba un mail de error por push
-- [ ] `ANTHROPIC_API_KEY` en Vercel — sin ella el consultor de reglas (❓ Reglas) se reporta no
-      disponible y el resto de la app anda igual
+- [ ] `GEMINI_API_KEY` (o `ANTHROPIC_API_KEY`) en Vercel — sin ninguna, el consultor de reglas
+      (❓ Reglas) y la carga por foto se reportan no disponibles y el resto de la app anda igual.
+      Los dos endpoints soportan Gemini y Claude; con las dos keys se usa Gemini.
 - [ ] QA con 2 dispositivos reales (crear sala / unirse / sync / cola offline / undo remoto)
 
 Todas las variables están documentadas en `catan-vercel-pwa/.env.example`.

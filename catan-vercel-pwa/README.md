@@ -60,12 +60,21 @@ duplicarlas.
 
 El botón **❓ Reglas** responde dudas puntuales en medio de la partida. La app es
 estática, así que la consulta pasa por una Vercel Function ([api/rules.js](api/rules.js))
-que llama a la API de Claude con la key guardada del lado del servidor.
+que llama a un modelo con la key guardada del lado del servidor. Anda con **Gemini**
+(`GEMINI_API_KEY`, key de [aistudio.google.com](https://aistudio.google.com/apikey)) o con
+**Claude** (`ANTHROPIC_API_KEY`, key de [console.anthropic.com](https://console.anthropic.com));
+si están las dos, se usa Gemini.
 
-Para activarlo: crear una API key en [console.anthropic.com](https://console.anthropic.com)
-y cargarla en Vercel como `ANTHROPIC_API_KEY` (marcada como *Sensitive*: nunca llega al
-navegador). Sin la variable, el botón explica cómo configurarlo y no gasta nada.
-`CATAN_RULES_MODEL` permite cambiar el modelo (por defecto `claude-opus-5`).
+Para activarlo: cargar una de las dos en Vercel (marcada como *Sensitive*: nunca llega al
+navegador). Sin ninguna, el botón explica cómo configurarlo y no gasta nada.
+`CATAN_RULES_GEMINI_MODEL` / `CATAN_RULES_MODEL` permiten cambiar el modelo (por defecto
+`gemini-3.6-flash` y `claude-opus-5`).
+
+La misma key habilita **cargar el tablero sacándole una foto** ([api/vision.js](api/vision.js)):
+la foto se achica en el celular, se manda al endpoint y vuelve qué recurso y qué número tiene
+cada hexágono. Es un borrador: la app lo muestra sobre el mapa, marca los hexágonos que leyó con
+dudas y no deja usarlo hasta que el tablero cierre con las piezas de la caja. La imagen no se
+guarda en ningún lado. `CATAN_VISION_GEMINI_MODEL` / `CATAN_VISION_MODEL` cambian el modelo.
 
 ## Estadísticas e historial
 

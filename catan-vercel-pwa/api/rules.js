@@ -1,11 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { geminiKey, generateContent, textOf as geminiText, toContent, GeminiError, DEFAULT_GEMINI_MODEL } from "./_gemini.js";
 
 // ═══════════════════════════════════════════════
 //  CONSULTOR DE REGLAS (Vercel Function)
 //
 //  La app es una PWA estática: la API key no puede vivir en el cliente, así
-//  que las preguntas pasan por acá. Sin ANTHROPIC_API_KEY el endpoint
-//  responde 503 y la app muestra cómo configurarlo.
+//  que las preguntas pasan por acá. Proveedores: Gemini (GEMINI_API_KEY) o
+//  Claude (ANTHROPIC_API_KEY); si están las dos, se usa Gemini. Sin ninguna
+//  el endpoint responde 503 y la app muestra cómo configurarlo.
 //
 //  GET  → { available }  (para que el cliente sepa si está configurado)
 //  POST → { question, history?, context? } → { answer }
@@ -13,6 +15,8 @@ import Anthropic from "@anthropic-ai/sdk";
 
 // El modelo se puede cambiar por variable de entorno sin tocar el código.
 const MODEL = process.env.CATAN_RULES_MODEL || "claude-opus-5";
+const GEMINI_MODEL = process.env.CATAN_RULES_GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+const provider = () => (geminiKey() ? "gemini" : process.env.ANTHROPIC_API_KEY ? "anthropic" : null);
 const MAX_QUESTION_CHARS = 500;
 const MAX_HISTORY_TURNS = 6;
 const MAX_TOKENS = 4000;
@@ -43,7 +47,7 @@ const textOf = (content) => content
 
 export default async function handler(req, res) {
   if (req.method === "GET") {
-    return res.status(200).json({ available: Boolean(process.env.ANTHROPIC_API_KEY) });
+    return res.status(200).json({ available: Boolean(provider()) });
   }
 
   if (req.method !== "POST") {
@@ -51,9 +55,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Método no permitido" });
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!provider()) {
     return res.status(503).json({
-      error: "El consultor de reglas no está configurado. Falta la variable ANTHROPIC_API_KEY en Vercel.",
+      error: "El consultor de reglas no está configurado. Falta GEMINI_API_KEY (o ANTHROPIC_API_KEY) en Vercel.",
     });
   }
 
@@ -77,6 +81,41 @@ export default async function handler(req, res) {
   const system = ctx.expansion
     ? `${SYSTEM}\n\nEsta partida usa la expansión de 5-6 jugadores.`
     : SYSTEM;
+
+  if (provider() === "gemini") {
+    try {
+      const candidate = await generateContent({
+        model: GEMINI_MODEL,
+        system,
+        contents: messages.map(toContent),
+        generationConfig: { maxOutputTokens: MAX_TOKENS },
+      });
+      if (candidate.finishReason === "SAFETY" || candidate.finishReason === "PROHIBITED_CONTENT") {
+        return res.status(200).json({
+          answer: "No puedo responder eso. Probá con una pregunta sobre las reglas de Catán.",
+        });
+      }
+      const answer = geminiText(candidate);
+      if (!answer) {
+        return res.status(200).json({ answer: "No pude generar una respuesta. Probá reformulando la pregunta." });
+      }
+      return res.status(200).json({
+        answer,
+        truncated: candidate.finishReason === "MAX_TOKENS" || undefined,
+      });
+    } catch (error) {
+      if (error instanceof GeminiError) {
+        if (error.status === 401 || error.status === 403) {
+          return res.status(503).json({ error: "La API key configurada no es válida." });
+        }
+        if (error.status === 429) {
+          return res.status(429).json({ error: "Muchas consultas seguidas. Probá de nuevo en unos segundos." });
+        }
+        return res.status(502).json({ error: "No se pudo consultar las reglas en este momento." });
+      }
+      return res.status(500).json({ error: "Error inesperado consultando las reglas." });
+    }
+  }
 
   try {
     const client = new Anthropic();
