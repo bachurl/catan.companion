@@ -191,8 +191,9 @@ sincronización que apareció jugando se corrigió en el PR #35 (issue #24).
       local en cada dispositivo (no se guarda en la base ni se ve desde otro celular)
 - [x] Proyecto Vercel duplicado (`bachurl-catan.companion`) borrado — fallaba en cada deploy porque
       apuntaba a la raíz del repo, donde no hay `package.json`, y mandaba un mail de error por push
-- [ ] `ANTHROPIC_API_KEY` en Vercel — sin ella el consultor de reglas (❓ Reglas) se reporta no
-      disponible y el resto de la app anda igual
+- [ ] `GEMINI_API_KEY` (o `ANTHROPIC_API_KEY`) en Vercel — sin ninguna, el consultor de reglas
+      (❓ Reglas) y la carga por foto se reportan no disponibles y el resto de la app anda igual.
+      Los dos endpoints soportan Gemini y Claude; con las dos keys se usa Gemini.
 - [ ] QA con 2 dispositivos reales (crear sala / unirse / sync / cola offline / undo remoto)
 
 Todas las variables están documentadas en `catan-vercel-pwa/.env.example`.

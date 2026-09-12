@@ -211,7 +211,7 @@ export default function CatanApp() {
   const [mapBoard, setMapBoard] = useState(null);
   const [mapPreview, setMapPreview] = useState(null);
   const [mapDifficulty, setMapDifficulty] = useState("equilibrado");
-  // El reconocimiento por foto necesita ANTHROPIC_API_KEY en el servidor: si no
+  // El reconocimiento por foto necesita GEMINI_API_KEY o ANTHROPIC_API_KEY en el servidor: si no
   // está, la opción no se ofrece en vez de fallar al tocarla.
   const [photoOk, setPhotoOk] = useState(false);
   const [tab, setTab] = useState("dados");

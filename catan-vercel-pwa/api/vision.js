@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { geminiKey, generateContent, textOf as geminiText, GeminiError, DEFAULT_GEMINI_MODEL } from "./_gemini.js";
 
 // ═══════════════════════════════════════════════
 //  RECONOCER EL TABLERO DESDE UNA FOTO (Vercel Function)
@@ -10,11 +11,16 @@ import Anthropic from "@anthropic-ai/sdk";
 //
 //  La imagen no se guarda: se manda a la API y se descarta.
 //
+//  Proveedores: Gemini (GEMINI_API_KEY) o Claude (ANTHROPIC_API_KEY); si están
+//  las dos, se usa Gemini.
+//
 //  GET  → { available }
 //  POST → { image: <base64 sin encabezado>, mediaType, layout } → { hexes, notes? }
 // ═══════════════════════════════════════════════
 
 const MODEL = process.env.CATAN_VISION_MODEL || "claude-opus-5";
+const GEMINI_MODEL = process.env.CATAN_VISION_GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+const provider = () => (geminiKey() ? "gemini" : process.env.ANTHROPIC_API_KEY ? "anthropic" : null);
 const MAX_TOKENS = 8000;
 // La API acepta hasta 5 MB por imagen. El cliente además la achica antes de subir.
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -86,9 +92,75 @@ const toolFor = (layout) => {
   };
 };
 
+// Mismo esquema que la herramienta, en el dialecto de Gemini (responseSchema).
+// Gemini solo acepta enum en strings: el número se valida después (photo.js
+// descarta el 7, los desiertos con ficha y demás basura).
+const geminiSchemaFor = (layout) => {
+  const total = LAYOUTS[layout].rows.reduce((a, b) => a + b, 0);
+  return {
+    type: "OBJECT",
+    properties: {
+      hexes: {
+        type: "ARRAY",
+        description: `Los ${total} hexágonos en orden de lectura.`,
+        items: {
+          type: "OBJECT",
+          properties: {
+            row: { type: "INTEGER", description: "Fila, empezando en 0 arriba." },
+            col: { type: "INTEGER", description: "Posición dentro de la fila, empezando en 0 a la izquierda." },
+            res: { type: "STRING", enum: RES },
+            num: { type: "INTEGER", nullable: true, description: `Ficha numerada (${NUMS.join(", ")}); null en el desierto.` },
+            confidence: { type: "NUMBER", description: "0 a 1." },
+          },
+          required: ["row", "col", "res", "num", "confidence"],
+        },
+      },
+      notes: { type: "STRING", description: "Aclaración corta, o vacío." },
+    },
+    required: ["hexes", "notes"],
+  };
+};
+
+const cleanHexes = (hexes) => (Array.isArray(hexes) ? hexes : []).map((h) => ({
+  ...h,
+  // Gemini a veces devuelve el número como string.
+  num: h?.num === null || h?.num === undefined || h?.num === "" ? null : Number(h.num),
+}));
+
+async function readWithGemini({ layout, mediaType, image }) {
+  const def = LAYOUTS[layout];
+  const total = def.rows.reduce((a, b) => a + b, 0);
+  const candidate = await generateContent({
+    model: GEMINI_MODEL,
+    system: SYSTEM,
+    contents: [{
+      role: "user",
+      parts: [
+        { inline_data: { mime_type: mediaType, data: image } },
+        {
+          text: `Leé este tablero de Catán (${layout === "ext" ? "expansión de 5-6 jugadores, 30 hexágonos" : "tablero clásico, 19 hexágonos"},`
+            + ` filas ${def.rows.join("-")}) y devolvé los ${total} hexágonos en JSON.`,
+        },
+      ],
+    }],
+    generationConfig: {
+      maxOutputTokens: MAX_TOKENS,
+      responseMimeType: "application/json",
+      responseSchema: geminiSchemaFor(layout),
+    },
+  });
+  const text = geminiText(candidate);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method === "GET") {
-    return res.status(200).json({ available: Boolean(process.env.ANTHROPIC_API_KEY) });
+    return res.status(200).json({ available: Boolean(provider()) });
   }
 
   if (req.method !== "POST") {
@@ -96,9 +168,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Método no permitido" });
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!provider()) {
     return res.status(503).json({
-      error: "El reconocimiento por foto no está configurado. Falta la variable ANTHROPIC_API_KEY en Vercel.",
+      error: "El reconocimiento por foto no está configurado. Falta GEMINI_API_KEY (o ANTHROPIC_API_KEY) en Vercel.",
     });
   }
 
@@ -112,6 +184,34 @@ export default async function handler(req, res) {
   // Largo en base64 → bytes aproximados, sin decodificar la imagen entera.
   if (image.length * 0.75 > MAX_IMAGE_BYTES) {
     return res.status(413).json({ error: "La foto es muy pesada. Sacá otra o probá con menos resolución." });
+  }
+
+  if (provider() === "gemini") {
+    try {
+      const input = await readWithGemini({ layout, mediaType, image });
+      if (!input || !Array.isArray(input.hexes) || !input.hexes.length) {
+        return res.status(422).json({ error: "No se reconoció ningún tablero en la foto. Probá con otra, más de frente y con buena luz." });
+      }
+      return res.status(200).json({
+        layout,
+        hexes: cleanHexes(input.hexes),
+        notes: typeof input.notes === "string" && input.notes.trim() ? input.notes.trim() : undefined,
+      });
+    } catch (error) {
+      if (error instanceof GeminiError) {
+        if (error.status === 401 || error.status === 403) {
+          return res.status(503).json({ error: "La API key configurada no es válida." });
+        }
+        if (error.status === 429) {
+          return res.status(429).json({ error: "Muchas fotos seguidas. Probá de nuevo en unos segundos." });
+        }
+        if (error.status === 422) {
+          return res.status(422).json({ error: "No se pudo leer la foto. Probá con otra." });
+        }
+        return res.status(502).json({ error: "No se pudo leer la foto en este momento." });
+      }
+      return res.status(500).json({ error: "Error inesperado leyendo la foto." });
+    }
   }
 
   const tool = toolFor(layout);
